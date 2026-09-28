@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
+import { BlobWriter } from "@zip.js/zip.js";
+import { backupFileName, createBackup } from "./exportBackup";
+import type { BackupProgress, BackupResult } from "./exportBackup";
 import { readKeepZip } from "./keepImport";
 import type { KeepZipResult } from "./keepImport";
 import { NOTE_COLORS } from "./types";
@@ -84,6 +87,10 @@ export default function App() {
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState("");
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<BackupProgress | null>(null);
+  const [exportResult, setExportResult] = useState<BackupResult | null>(null);
+  const [exportMessage, setExportMessage] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -273,7 +280,7 @@ export default function App() {
   async function importZip(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
-    if (!file || importing) return;
+    if (!file || importing || exporting) return;
     setImporting(true);
     setImportMessage("ZIPを解析中…");
     setImportProgress(null);
@@ -336,6 +343,49 @@ export default function App() {
     }
   }
 
+  async function exportAll() {
+    if (exporting || importing) return;
+    setExporting(true);
+    setExportProgress(null);
+    setExportResult(null);
+    setExportMessage("");
+    const filename = backupFileName();
+    let fileStream: WritableStream<Uint8Array> | null = null;
+    try {
+      type SaveHandle = { createWritable: () => Promise<WritableStream<Uint8Array>> };
+      const picker = (window as Window & { showSaveFilePicker?: (options: {
+        suggestedName: string; types: { description: string; accept: Record<string, string[]> }[];
+      }) => Promise<SaveHandle> }).showSaveFilePicker;
+      if (picker) {
+        const handle = await picker.call(window, { suggestedName: filename,
+          types: [{ description: "ZIP", accept: { "application/zip": [".zip"] } }] });
+        fileStream = await handle.createWritable();
+      }
+      const result = await createBackup(fileStream ?? new BlobWriter("application/zip"), setExportProgress);
+      if (result.blob) {
+        const url = URL.createObjectURL(result.blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      }
+      setExportResult(result);
+      setExportMessage("エクスポート完了");
+    } catch (cause) {
+      if (fileStream) {
+        try { await fileStream.abort(cause); } catch { /* ファイルが既に閉じている場合は何もしない。 */ }
+      }
+      if (!(cause instanceof Error && cause.name === "AbortError")) {
+        setExportMessage(cause instanceof Error ? cause.message : "エクスポートに失敗しました。");
+      }
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <main className="app">
       <header className="topbar">
@@ -364,7 +414,7 @@ export default function App() {
         <summary>Google Keep Import</summary>
         <div className="import-content">
           <label>Takeout ZIPを選択
-            <input type="file" accept=".zip,application/zip" onChange={importZip} disabled={importing} />
+            <input type="file" accept=".zip,application/zip" onChange={importZip} disabled={importing || exporting} />
           </label>
           {importMessage && <p role="status">{importMessage}</p>}
           {importProgress && <p>メモ: {importProgress.notes.done} / {importProgress.notes.total}<br />
@@ -373,6 +423,17 @@ export default function App() {
             成功 {importProgress.attachments.success}　失敗 {importProgress.attachments.failed}　スキップ {importProgress.attachments.skipped}</p>}
         </div>
       </details>
+
+      <section className="export-panel" aria-label="バックアップ">
+        <button onClick={exportAll} disabled={exporting || importing}>全データをエクスポート</button>
+        {exportProgress && exportProgress.stage !== "done" && <p role="status">
+          メモ取得: {exportProgress.notesDone} / {exportProgress.notesTotal}<br />
+          添付取得: {exportProgress.attachmentsDone} / {exportProgress.attachmentsTotal}<br />
+          {exportProgress.stage === "zip" ? "ZIP作成中..." : exportProgress.stage === "notes" ? "メモ取得中..." : "添付取得中..."}
+        </p>}
+        {exportMessage && <p role="status">{exportMessage}</p>}
+        {exportResult && <p>メモ {exportResult.notes}件　添付成功 {exportResult.attachmentsSucceeded}件　添付失敗 {exportResult.attachmentsFailed}件</p>}
+      </section>
 
       {error && !draft && <p className="error" role="alert">{error}</p>}
       {!loading && notes.length === 0 && <p className="empty">{search.trim() || labelFilter ? "該当するメモはありません。" : view === "active" ? "メモはまだありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}

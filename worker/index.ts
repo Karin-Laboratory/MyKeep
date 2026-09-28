@@ -248,6 +248,13 @@ async function listLabels(env: Env): Promise<Response> {
   return json({ labels: (result.results ?? []).map((row) => row.name) });
 }
 
+async function exportCounts(env: Env): Promise<Response> {
+  const counts = await env.DB.prepare(
+    "SELECT (SELECT COUNT(*) FROM notes) AS notes, (SELECT COUNT(*) FROM attachments) AS attachments",
+  ).first<{ notes: number; attachments: number }>();
+  return json({ notes: counts?.notes ?? 0, attachments: counts?.attachments ?? 0 });
+}
+
 function relationStatements(noteId: string, input: NoteInput, env: Env, replace: boolean): D1PreparedStatement[] {
   const statements: D1PreparedStatement[] = [];
   if (input.checklist !== undefined) {
@@ -515,6 +522,10 @@ export default {
 
       if (url.pathname === "/api/labels" && request.method === "GET") {
         return await listLabels(env);
+      }
+
+      if (url.pathname === "/api/export/counts" && request.method === "GET") {
+        return await exportCounts(env);
       }
 
       if (url.pathname === "/api/import/keep" && request.method === "POST") {
