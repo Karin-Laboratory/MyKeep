@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MyKeepの設定</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="options.js"></script>
+  </head>
+  <body class="options">
+    <h1>MyKeepの設定</h1>
+    <form id="optionsForm">
+      <label>API URL<input id="apiUrl" type="url" placeholder="https://example.com/api/capture" required /></label>
+      <label>API KEY<input id="apiKey" type="password" autocomplete="off" required /></label>
+      <p id="status" role="status" aria-live="polite"></p>
+      <button type="submit" class="primary">設定を保存</button>
+    </form>
+  </body>
+</html>

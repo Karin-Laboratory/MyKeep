@@ -28,6 +28,7 @@ const PAGE_SIZE = 50;
 const MAX_SEARCH_LENGTH = 200;
 const MAX_REQUEST_BYTES = 120_000;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_CAPTURE_BYTES = MAX_IMAGE_BYTES + 1024 * 1024;
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
 const COLOR_SET = new Set<string>(NOTE_COLORS);
 
@@ -47,6 +48,25 @@ function toAttachment(row: AttachmentRow): Attachment {
     url: `/api/notes/${row.note_id}/attachments/${row.id}/image`,
     created_at: row.created_at,
   };
+}
+
+function validFilename(filename: string): boolean {
+  return !!filename && filename.length <= 255 && !/[\x00-\x1f\x7f]/.test(filename);
+}
+
+async function matchesApiKey(header: string | null, secret: string): Promise<boolean> {
+  const match = /^Bearer ([^\s]+)$/i.exec(header ?? "");
+  if (!match || match[1].length > 512) return false;
+  const encoder = new TextEncoder();
+  const [provided, expected] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(match[1])),
+    crypto.subtle.digest("SHA-256", encoder.encode(secret)),
+  ]);
+  const a = new Uint8Array(provided);
+  const b = new Uint8Array(expected);
+  let difference = 0;
+  for (let index = 0; index < a.length; index++) difference |= a[index] ^ b[index];
+  return difference === 0;
 }
 
 async function readBytes(request: Request, maxBytes: number): Promise<Uint8Array> {
@@ -149,16 +169,19 @@ async function listNotes(request: Request, env: Env): Promise<Response> {
   return json({ notes: page.map((row) => toNote(row, byNote.get(row.id))), hasMore: rows.length > PAGE_SIZE });
 }
 
-async function createNote(request: Request, env: Env): Promise<Response> {
-  const input = parseInput(await readInput(request));
-  if (!input) return json({ error: "メモの内容を確認してください。" }, 400);
-
+async function insertNote(input: NoteInput, env: Env): Promise<Note> {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   await env.DB.prepare(
     "INSERT INTO notes (id, title, body, url, pinned, archived, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
   ).bind(id, input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, now, now).run();
-  return json({ note: { id, ...input, deleted_at: null, created_at: now, updated_at: now, attachments: [] } satisfies Note }, 201);
+  return { id, ...input, deleted_at: null, created_at: now, updated_at: now, attachments: [] } satisfies Note;
+}
+
+async function createNote(request: Request, env: Env): Promise<Response> {
+  const input = parseInput(await readInput(request));
+  if (!input) return json({ error: "メモの内容を確認してください。" }, 400);
+  return json({ note: await insertNote(input, env) }, 201);
 }
 
 async function updateNote(id: string, request: Request, env: Env): Promise<Response> {
@@ -207,6 +230,22 @@ async function permanentlyDeleteNote(id: string, env: Env): Promise<Response> {
   return json({ ok: true });
 }
 
+async function persistAttachment(noteId: string, filename: string, mime: string, bytes: Uint8Array, env: Env): Promise<Attachment> {
+  const id = crypto.randomUUID();
+  const key = `notes/${noteId}/${id}`;
+  const createdAt = new Date().toISOString();
+  await env.IMAGES.put(key, bytes, { httpMetadata: { contentType: mime } });
+  try {
+    await env.DB.prepare(
+      "INSERT INTO attachments (id, note_id, filename, mime_type, r2_key, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ).bind(id, noteId, filename, mime, key, createdAt).run();
+  } catch (error) {
+    await env.IMAGES.delete(key);
+    throw error;
+  }
+  return toAttachment({ id, note_id: noteId, filename, mime_type: mime, r2_key: key, created_at: createdAt });
+}
+
 async function uploadAttachment(noteId: string, request: Request, env: Env): Promise<Response> {
   const note = await env.DB.prepare("SELECT id FROM notes WHERE id = ? AND deleted_at IS NULL").bind(noteId).first();
   if (!note) return json({ error: "メモが見つかりません。" }, 404);
@@ -220,9 +259,7 @@ async function uploadAttachment(noteId: string, request: Request, env: Env): Pro
   } catch {
     return json({ error: "ファイル名を確認してください。" }, 400);
   }
-  if (!filename || filename.length > 255 || /[\x00-\x1f\x7f]/.test(filename)) {
-    return json({ error: "ファイル名を確認してください。" }, 400);
-  }
+  if (!validFilename(filename)) return json({ error: "ファイル名を確認してください。" }, 400);
 
   const contentLength = Number(request.headers.get("Content-Length") ?? "0");
   if (contentLength > MAX_IMAGE_BYTES) return json({ error: "画像は20MB以下にしてください。" }, 413);
@@ -236,20 +273,66 @@ async function uploadAttachment(noteId: string, request: Request, env: Env): Pro
     throw error;
   }
   if (!bytes.length) return json({ error: "画像が空です。" }, 400);
+  return json({ attachment: await persistAttachment(noteId, filename, mime, bytes, env) }, 201);
+}
 
-  const id = crypto.randomUUID();
-  const key = `notes/${noteId}/${id}`;
-  const createdAt = new Date().toISOString();
-  await env.IMAGES.put(key, bytes, { httpMetadata: { contentType: mime } });
-  try {
-    await env.DB.prepare(
-      "INSERT INTO attachments (id, note_id, filename, mime_type, r2_key, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    ).bind(id, noteId, filename, mime, key, createdAt).run();
-  } catch (error) {
-    await env.IMAGES.delete(key);
-    throw error;
+async function captureNote(request: Request, env: Env): Promise<Response> {
+  const secret = (env as Env & { CAPTURE_API_KEY?: string }).CAPTURE_API_KEY;
+  if (!secret) return json({ error: "保存APIが設定されていません。" }, 503);
+  if (!await matchesApiKey(request.headers.get("Authorization"), secret)) {
+    return json({ error: "API KEYが正しくありません。" }, 401);
   }
-  return json({ attachment: toAttachment({ id, note_id: noteId, filename, mime_type: mime, r2_key: key, created_at: createdAt }) }, 201);
+
+  const contentType = request.headers.get("Content-Type") ?? "";
+  if (!contentType.toLowerCase().startsWith("multipart/form-data;")) {
+    return json({ error: "送信形式が正しくありません。" }, 415);
+  }
+  const contentLength = Number(request.headers.get("Content-Length") ?? "0");
+  if (contentLength > MAX_CAPTURE_BYTES) return json({ error: "送信サイズが大きすぎます。" }, 413);
+  const bytes = await readBytes(request, MAX_CAPTURE_BYTES);
+  let form: FormData;
+  try {
+    form = await new Response(bytes.buffer as ArrayBuffer, { headers: { "Content-Type": contentType } }).formData();
+  } catch {
+    return json({ error: "送信内容を確認してください。" }, 400);
+  }
+
+  const title = form.get("title");
+  const url = form.get("url");
+  const body = form.get("body") ?? "";
+  if (typeof title !== "string" || typeof url !== "string" || !url || typeof body !== "string") {
+    return json({ error: "メモの内容を確認してください。" }, 400);
+  }
+  const input = parseInput({ title, url, body, pinned: false, archived: false, color: "default" });
+  if (!input) return json({ error: "メモの内容を確認してください。" }, 400);
+
+  const images = form.getAll("image");
+  if (images.length > 1) return json({ error: "画像は1枚だけ選んでください。" }, 400);
+  const image = images[0];
+  let imageBytes: Uint8Array | null = null;
+  let filename = "";
+  let mime = "";
+  if (image !== undefined) {
+    if (!(image instanceof File)) return json({ error: "画像を確認してください。" }, 400);
+    mime = image.type.toLowerCase();
+    filename = image.name.trim();
+    if (!IMAGE_TYPES.has(mime)) return json({ error: "対応していない画像形式です。" }, 415);
+    if (!validFilename(filename)) return json({ error: "ファイル名を確認してください。" }, 400);
+    if (!image.size) return json({ error: "画像が空です。" }, 400);
+    if (image.size > MAX_IMAGE_BYTES) return json({ error: "画像は20MB以下にしてください。" }, 413);
+    imageBytes = new Uint8Array(await image.arrayBuffer());
+  }
+
+  const note = await insertNote(input, env);
+  if (imageBytes) {
+    try {
+      note.attachments.push(await persistAttachment(note.id, filename, mime, imageBytes, env));
+    } catch (error) {
+      await env.DB.prepare("DELETE FROM notes WHERE id = ?").bind(note.id).run();
+      throw error;
+    }
+  }
+  return json({ note }, 201);
 }
 
 async function getAttachment(noteId: string, attachmentId: string, env: Env): Promise<Response> {
@@ -285,12 +368,16 @@ export default {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/api/")) return json({ error: "見つかりません。" }, 404);
 
-    if (request.method !== "GET") {
-      const origin = request.headers.get("Origin");
-      if (origin && origin !== url.origin) return json({ error: "この操作は許可されていません。" }, 403);
-    }
-
     try {
+      if (url.pathname === "/api/capture" && request.method === "POST") {
+        return await captureNote(request, env);
+      }
+
+      if (request.method !== "GET") {
+        const origin = request.headers.get("Origin");
+        if (origin && origin !== url.origin) return json({ error: "この操作は許可されていません。" }, 403);
+      }
+
       if (url.pathname === "/api/notes") {
         if (request.method === "GET") return await listNotes(request, env);
         if (request.method === "POST") return await createNote(request, env);

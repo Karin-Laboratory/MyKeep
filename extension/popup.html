@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MyKeepに保存</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="popup.js"></script>
+  </head>
+  <body class="popup">
+    <header>
+      <h1>MyKeepに保存</h1>
+      <button id="openOptions" type="button" class="text-button">設定</button>
+    </header>
+    <form id="captureForm">
+      <label>タイトル<input id="title" type="text" readonly /></label>
+      <label>URL<input id="url" type="url" readonly /></label>
+      <label>メモ<textarea id="body" rows="4" placeholder="任意のメモ"></textarea></label>
+      <label>画像<input id="imageFile" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" /></label>
+      <div id="pasteArea" tabindex="0">画像はここで Ctrl+V でも貼り付けできます</div>
+      <div id="imagePreview" hidden>
+        <img id="previewImage" alt="添付画像のプレビュー" />
+        <span id="imageName"></span>
+        <button id="removeImage" type="button" class="text-button">画像を外す</button>
+      </div>
+      <p id="status" role="status" aria-live="polite"></p>
+      <button id="save" type="submit" class="primary" disabled>保存</button>
+    </form>
+  </body>
+</html>

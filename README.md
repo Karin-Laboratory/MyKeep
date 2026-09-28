@@ -1,6 +1,6 @@
 # MyKeep
 
-自分用のシンプルなメモアプリです。メモの作成・編集・一覧、URL、ピン留め、アーカイブ、複数画像の添付・表示・削除、検索、色、ゴミ箱・復元・完全削除に対応します。PWAとしてホーム画面からも起動できます。Chrome 拡張、インポート、エクスポートは未実装です。
+自分用のシンプルなメモアプリです。メモの作成・編集・一覧、URL、ピン留め、アーカイブ、複数画像の添付・表示・削除、検索、色、ゴミ箱・復元・完全削除に対応します。PWAとしてホーム画面からも起動できます。Chrome 拡張から現在のページも保存できます。Google Keep のインポートとエクスポートは未実装です。
 
 ## ローカルで起動
 
@@ -27,6 +27,14 @@ npm run dev
 
 Service Worker は画面遷移をネットワークから取得するだけです。メモや画像を端末にキャッシュしないため、利用には通信が必要です。
 
+## Chrome 拡張
+
+Chrome で `chrome://extensions` を開き、デベロッパーモードを有効にして「パッケージ化されていない拡張機能を読み込む」から `extension/` を選びます。拡張の設定画面で `API URL` に `https://<MyKeepのホスト>/api/capture`、`API KEY` に Worker の Secret と同じ値を入力して保存します。保存時に、そのホストへの接続許可を求められます。
+
+ツールバーのアイコンを押すと現在ページのタイトルと URL が入ります。メモは任意です。画像は1枚まで、Ctrl+V またはファイル選択で追加して「保存」を押します。対応形式と20MB制限はWeb本体と同じです。
+
+ローカルで試す場合は、Git管理外の `.dev.vars` に `CAPTURE_API_KEY` を設定し、API URL に `http://127.0.0.1:8787/api/capture` を指定します。APIキーをソースコードや D1 に保存しないでください。
+
 ## Cloudflare へのデプロイ準備
 
 1. Cloudflare アカウントで `npx wrangler login` を実行します。
@@ -36,15 +44,18 @@ Service Worker は画面遷移をネットワークから取得するだけで�
 5. `npx wrangler r2 bucket create mykeep-images` で画像用の非公開 R2 バケットを作ります。公開アクセスは有効にしません。
 6. `npm run deploy` で Worker と Web をデプロイします。
 7. Cloudflare ダッシュボードの **Workers & Pages → mykeep → Access** で **Protect this Worker behind Access** を選び、**All traffic** と自分のメールアドレスだけを許可するポリシーを設定します。ログイン方法はメールのワンタイム PIN を使用します。
+8. 32バイト以上のランダムな API KEY を用意し、`npx wrangler secret put CAPTURE_API_KEY` で Worker Secret に登録します。同じ値をChrome拡張の設定画面に入力します。
+9. 拡張の API URL に使うホストの **`/api/capture` だけ** を対象に、Cloudflare Access のパス別アプリと Bypass ポリシーを設定します。それ以外のパスはメールOTPの保護を維持します。この例外パスは Worker 内の Bearer API KEY で認証します。
 
-**Access の All traffic 保護が有効になるまで個人データを保存しないでください。** Worker 単位の保護は `workers.dev`、カスタムドメイン、プレビューをまとめて対象にできます。API と画像はアプリ内認証を持たず、Web と同じ Worker 経由で提供します。
+**Access の保護と `/api/capture` のAPIキー認証を確認するまで個人データを保存しないでください。** 通常のWeb APIと画像はWebと同じWorker経由で提供し、Accessで保護します。`/api/capture` はAccessの例外パスになるため、APIキーが必須です。
 
 ## 構成
 
 - `src/`: React の画面
 - `worker/`: Worker API
+- `extension/`: Chrome Manifest V3 拡張
 - `public/`: Manifest、アイコン、Service Worker
 - `migrations/`: D1 のスキーマ
 - `wrangler.jsonc`: Workers・D1・R2 の設定
 
-メモ一覧は 50 件ずつ読み込みます。画像本体は一覧の JSON に含めず、`loading="lazy"` で必要になった時だけ取得します。次の Phase 5 は Chrome 拡張です。
+メモ一覧は 50 件ずつ読み込みます。画像本体は一覧の JSON に含めず、`loading="lazy"` で必要になった時だけ取得します。次の Phase 6 は Google Keep Import です。
