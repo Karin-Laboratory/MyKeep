@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
+import { readKeepZip } from "./keepImport";
 import { NOTE_COLORS } from "./types";
 import type { Attachment, Note, NoteColor, NoteInput } from "./types";
 
 type View = "active" | "archived" | "trash";
 type NoteList = { notes: Note[]; hasMore: boolean };
+type ImportProgress = { done: number; total: number; success: number; failed: number; skipped: number };
 
 const emptyNote: NoteInput = { title: "", body: "", url: "", pinned: false, archived: false, color: "default" };
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -62,6 +64,9 @@ export default function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<NoteInput | null>(null);
   const [editorAttachments, setEditorAttachments] = useState<Attachment[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState("");
+  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -235,6 +240,43 @@ export default function App() {
     }
   }
 
+  async function importZip(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file || importing) return;
+    setImporting(true);
+    setImportMessage("ZIPを解析中…");
+    setImportProgress(null);
+    try {
+      const extracted = await readKeepZip(file);
+      const progress: ImportProgress = {
+        done: extracted.failed + extracted.skipped,
+        total: extracted.total,
+        success: 0,
+        failed: extracted.failed,
+        skipped: extracted.skipped,
+      };
+      setImportProgress({ ...progress });
+      setImportMessage("インポート中…");
+      for (const note of extracted.notes) {
+        try {
+          await api("/api/import/keep", { method: "POST", body: JSON.stringify(note) });
+          progress.success += 1;
+        } catch {
+          progress.failed += 1;
+        }
+        progress.done += 1;
+        setImportProgress({ ...progress });
+      }
+      setImportMessage("インポート完了");
+      setReload((value) => value + 1);
+    } catch (cause) {
+      setImportMessage(cause instanceof Error ? cause.message : "インポートに失敗しました。");
+    } finally {
+      setImporting(false);
+    }
+  }
+
   return (
     <main className="app">
       <header className="topbar">
@@ -252,6 +294,18 @@ export default function App() {
           <input type="search" value={search} maxLength={200} placeholder="タイトル・本文・URL" onChange={(event) => setSearch(event.target.value)} />
         </label>
       </div>
+
+      <details className="import-panel">
+        <summary>Google Keep Import</summary>
+        <div className="import-content">
+          <label>Takeout ZIPを選択
+            <input type="file" accept=".zip,application/zip" onChange={importZip} disabled={importing} />
+          </label>
+          {importMessage && <p role="status">{importMessage}</p>}
+          {importProgress && <p>進捗 {importProgress.done} / {importProgress.total}<br />
+            成功 {importProgress.success}　失敗 {importProgress.failed}　スキップ {importProgress.skipped}</p>}
+        </div>
+      </details>
 
       {error && !draft && <p className="error" role="alert">{error}</p>}
       {!loading && notes.length === 0 && <p className="empty">{search.trim() ? "検索結果はありません。" : view === "active" ? "メモはまだありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}

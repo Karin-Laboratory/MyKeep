@@ -27,6 +27,7 @@ const SELECT_NOTE = "SELECT id, title, body, url, pinned, archived, color, delet
 const PAGE_SIZE = 50;
 const MAX_SEARCH_LENGTH = 200;
 const MAX_REQUEST_BYTES = 120_000;
+const MAX_IMPORT_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_CAPTURE_BYTES = MAX_IMAGE_BYTES + 1024 * 1024;
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
@@ -95,8 +96,8 @@ async function readBytes(request: Request, maxBytes: number): Promise<Uint8Array
   return bytes;
 }
 
-async function readInput(request: Request): Promise<unknown> {
-  const bytes = await readBytes(request, MAX_REQUEST_BYTES);
+async function readInput(request: Request, maxBytes = MAX_REQUEST_BYTES): Promise<unknown> {
+  const bytes = await readBytes(request, maxBytes);
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
@@ -169,19 +170,36 @@ async function listNotes(request: Request, env: Env): Promise<Response> {
   return json({ notes: page.map((row) => toNote(row, byNote.get(row.id))), hasMore: rows.length > PAGE_SIZE });
 }
 
-async function insertNote(input: NoteInput, env: Env): Promise<Note> {
+async function insertNote(input: NoteInput, env: Env, timestamps?: { created_at: string; updated_at: string }): Promise<Note> {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  const createdAt = timestamps?.created_at ?? now;
+  const updatedAt = timestamps?.updated_at ?? now;
   await env.DB.prepare(
     "INSERT INTO notes (id, title, body, url, pinned, archived, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  ).bind(id, input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, now, now).run();
-  return { id, ...input, deleted_at: null, created_at: now, updated_at: now, attachments: [] } satisfies Note;
+  ).bind(id, input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, createdAt, updatedAt).run();
+  return { id, ...input, deleted_at: null, created_at: createdAt, updated_at: updatedAt, attachments: [] } satisfies Note;
 }
 
 async function createNote(request: Request, env: Env): Promise<Response> {
   const input = parseInput(await readInput(request));
   if (!input) return json({ error: "メモの内容を確認してください。" }, 400);
   return json({ note: await insertNote(input, env) }, 201);
+}
+
+async function importKeepNote(request: Request, env: Env): Promise<Response> {
+  const value = await readInput(request, MAX_IMPORT_BYTES);
+  const input = parseInput(value);
+  if (!input || !value || typeof value !== "object" || Array.isArray(value)) {
+    return json({ error: "インポートするメモを確認してください。" }, 400);
+  }
+  const { created_at, updated_at } = value as Record<string, unknown>;
+  if (typeof created_at !== "string" || typeof updated_at !== "string"
+    || !Number.isFinite(Date.parse(created_at)) || !Number.isFinite(Date.parse(updated_at))
+    || new Date(created_at).toISOString() !== created_at || new Date(updated_at).toISOString() !== updated_at) {
+    return json({ error: "日時を確認してください。" }, 400);
+  }
+  return json({ note: await insertNote(input, env, { created_at, updated_at }) }, 201);
 }
 
 async function updateNote(id: string, request: Request, env: Env): Promise<Response> {
@@ -381,6 +399,10 @@ export default {
       if (url.pathname === "/api/notes") {
         if (request.method === "GET") return await listNotes(request, env);
         if (request.method === "POST") return await createNote(request, env);
+      }
+
+      if (url.pathname === "/api/import/keep" && request.method === "POST") {
+        return await importKeepNote(request, env);
       }
 
       const attachmentsMatch = /^\/api\/notes\/([0-9a-f-]{36})\/attachments$/.exec(url.pathname);

@@ -1,6 +1,6 @@
 # MyKeep
 
-自分用のシンプルなメモアプリです。メモの作成・編集・一覧、URL、ピン留め、アーカイブ、複数画像の添付・表示・削除、検索、色、ゴミ箱・復元・完全削除に対応します。PWAとしてホーム画面からも起動できます。Chrome 拡張から現在のページも保存できます。Google Keep のインポートとエクスポートは未実装です。
+自分用のシンプルなメモアプリです。メモの作成・編集・一覧、URL、ピン留め、アーカイブ、複数画像の添付・表示・削除、検索、色、ゴミ箱・復元・完全削除に対応します。PWAとしてホーム画面からも起動できます。Chrome 拡張から現在のページも保存できます。Google Keep Takeout の基本インポートにも対応します。
 
 ## ローカルで起動
 
@@ -35,6 +35,12 @@ Chrome で `chrome://extensions` を開き、デベロッパーモードを有�
 
 ローカルで試す場合は、Git管理外の `.dev.vars` に `CAPTURE_API_KEY` を設定し、API URL に `http://127.0.0.1:8787/api/capture` を指定します。APIキーをソースコードや D1 に保存しないでください。
 
+## Google Keep Import（Phase 6A）
+
+画面の「Google Keep Import」を開き、Google Takeout の ZIP を選びます。ZIP と Keep JSON はブラウザで読み取り、Worker へはメモを1件ずつ送ります。進捗と成功・失敗・スキップ件数を表示します。タイトル、本文、ピン、アーカイブ、作成日時、更新日時を取り込みます。本文全体がURLの場合はURL欄にも保存します。
+
+ゴミ箱内のメモ、本文のないチェックリスト、空のメモはスキップします。画像・添付ファイル、チェックリストの完全変換、ラベルは次の Phase 6B で扱います。再実行時の重複判定はありません。
+
 ## Cloudflare へのデプロイ準備
 
 1. Cloudflare アカウントで `npx wrangler login` を実行します。
@@ -58,4 +64,4 @@ Chrome で `chrome://extensions` を開き、デベロッパーモードを有�
 - `migrations/`: D1 のスキーマ
 - `wrangler.jsonc`: Workers・D1・R2 の設定
 
-メモ一覧は 50 件ずつ読み込みます。画像本体は一覧の JSON に含めず、`loading="lazy"` で必要になった時だけ取得します。次の Phase 6 は Google Keep Import です。
+メモ一覧は 50 件ずつ読み込みます。画像本体は一覧の JSON に含めず、`loading="lazy"` で必要になった時だけ取得します。
