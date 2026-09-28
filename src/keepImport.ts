@@ -60,8 +60,24 @@ export function parseKeepNote(value: unknown, hasAttachments = false): KeepImpor
   if (typeof title !== "string" || typeof body !== "string"
     || typeof pinned !== "boolean" || typeof archived !== "boolean") return "fail";
   if (title.length > 300 || body.length > 100_000) return "fail";
-  if (Array.isArray(source.listContent) && source.listContent.length && !body.trim()) return "skip";
-  if (!title.trim() && !body.trim() && !hasAttachments) return "skip";
+
+  const checklist = Array.isArray(source.listContent)
+    ? source.listContent.flatMap((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const item = value as Record<string, unknown>;
+      return typeof item.text === "string" && item.text.length <= 10_000 && typeof item.isChecked === "boolean"
+        ? [{ text: item.text, checked: item.isChecked }] : [];
+    })
+    : [];
+  const labels = Array.isArray(source.labels)
+    ? source.labels.flatMap((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const name = (value as Record<string, unknown>).name;
+      return typeof name === "string" && name.trim() && name.trim().length <= 100 ? [name.trim().normalize("NFC")] : [];
+    }).filter((name, index, all) => all.findIndex((other) => other.toLowerCase() === name.toLowerCase()) === index)
+    : [];
+  if (checklist.length > 500 || labels.length > 50) return "fail";
+  if (!title.trim() && !body.trim() && !checklist.length && !hasAttachments) return "skip";
 
   const created = keepTimestamp(source.createdTimestampUsec);
   const updated = keepTimestamp(source.userEditedTimestampUsec);
@@ -79,7 +95,7 @@ export function parseKeepNote(value: unknown, hasAttachments = false): KeepImpor
   }
 
   return {
-    title, body, url, pinned, archived, color: "default",
+    title, body, url, pinned, archived, color: "default", checklist, labels,
     created_at: created ?? updated!, updated_at: updated ?? created!,
   };
 }

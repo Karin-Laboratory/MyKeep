@@ -1,5 +1,5 @@
 import { NOTE_COLORS } from "../src/types";
-import type { Attachment, Note, NoteColor, NoteInput } from "../src/types";
+import type { Attachment, ChecklistItem, Note, NoteColor, NoteInput } from "../src/types";
 
 interface NoteRow {
   id: string;
@@ -23,9 +23,24 @@ interface AttachmentRow {
   created_at: string;
 }
 
+interface ChecklistRow {
+  id: string;
+  note_id: string;
+  position: number;
+  text: string;
+  checked: number;
+}
+
+interface LabelRow {
+  note_id: string;
+  name: string;
+}
+
 const SELECT_NOTE = "SELECT id, title, body, url, pinned, archived, color, deleted_at, created_at, updated_at FROM notes";
 const PAGE_SIZE = 50;
 const MAX_SEARCH_LENGTH = 200;
+const MAX_CHECKLIST_ITEMS = 500;
+const MAX_LABELS = 50;
 const MAX_REQUEST_BYTES = 120_000;
 const MAX_IMPORT_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -38,8 +53,12 @@ function json(data: unknown, status = 200): Response {
   return Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-function toNote(row: NoteRow, attachments: Attachment[] = []): Note {
-  return { ...row, pinned: row.pinned === 1, archived: row.archived === 1, attachments };
+function toNote(row: NoteRow, attachments: Attachment[] = [], checklist: ChecklistItem[] = [], labels: string[] = []): Note {
+  return { ...row, pinned: row.pinned === 1, archived: row.archived === 1, attachments, checklist, labels };
+}
+
+function labelKey(name: string): string {
+  return name.trim().normalize("NFC").toLowerCase();
 }
 
 function toAttachment(row: AttachmentRow): Attachment {
@@ -116,12 +135,40 @@ function parseInput(value: unknown, current?: NoteRow, allowEmpty = false): Note
   const archived = input.archived ?? (current ? current.archived === 1 : false);
   const color = input.color ?? current?.color ?? "default";
 
+  let checklist: NoteInput["checklist"];
+  if (input.checklist !== undefined) {
+    if (!Array.isArray(input.checklist) || input.checklist.length > MAX_CHECKLIST_ITEMS) return null;
+    checklist = [];
+    for (const value of input.checklist) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      const item = value as Record<string, unknown>;
+      if (typeof item.text !== "string" || item.text.length > 10_000 || typeof item.checked !== "boolean") return null;
+      checklist.push({ text: item.text, checked: item.checked });
+    }
+  }
+  let labels: string[] | undefined;
+  if (input.labels !== undefined) {
+    if (!Array.isArray(input.labels) || input.labels.length > MAX_LABELS) return null;
+    const seen = new Set<string>();
+    labels = [];
+    for (const value of input.labels) {
+      if (typeof value !== "string") return null;
+      const name = value.trim().normalize("NFC");
+      if (!name || name.length > 100) return null;
+      const key = labelKey(name);
+      if (!seen.has(key)) {
+        labels.push(name);
+        seen.add(key);
+      }
+    }
+  }
+
   if (typeof title !== "string" || title.length > 300) return null;
   if (typeof body !== "string" || body.length > 100_000) return null;
   if (typeof url !== "string" || url.length > 2_000) return null;
   if (typeof pinned !== "boolean" || typeof archived !== "boolean") return null;
   if (typeof color !== "string" || !COLOR_SET.has(color)) return null;
-  if (!title.trim() && !body.trim() && !url.trim() && !allowEmpty) return null;
+  if (!title.trim() && !body.trim() && !url.trim() && !checklist?.length && !current && !allowEmpty) return null;
 
   if (url) {
     try {
@@ -131,7 +178,37 @@ function parseInput(value: unknown, current?: NoteRow, allowEmpty = false): Note
       return null;
     }
   }
-  return { title, body, url, pinned, archived, color: color as NoteColor };
+  return { title, body, url, pinned, archived, color: color as NoteColor, checklist, labels };
+}
+
+async function withRelations(rows: NoteRow[], env: Env): Promise<Note[]> {
+  if (!rows.length) return [];
+  const ids = rows.map((row) => row.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const [attachments, items, labels] = await Promise.all([
+    env.DB.prepare(`SELECT id, note_id, filename, mime_type, r2_key, created_at FROM attachments WHERE note_id IN (${placeholders}) ORDER BY created_at, id`).bind(...ids).all<AttachmentRow>(),
+    env.DB.prepare(`SELECT id, note_id, position, text, checked FROM checklist_items WHERE note_id IN (${placeholders}) ORDER BY position, id`).bind(...ids).all<ChecklistRow>(),
+    env.DB.prepare(`SELECT nl.note_id, l.name FROM note_labels nl JOIN labels l ON l.name_key = nl.label_key WHERE nl.note_id IN (${placeholders}) ORDER BY l.name`).bind(...ids).all<LabelRow>(),
+  ]);
+  const byAttachment = new Map<string, Attachment[]>();
+  const byChecklist = new Map<string, ChecklistItem[]>();
+  const byLabel = new Map<string, string[]>();
+  for (const row of attachments.results ?? []) {
+    const list = byAttachment.get(row.note_id) ?? [];
+    list.push(toAttachment(row));
+    byAttachment.set(row.note_id, list);
+  }
+  for (const row of items.results ?? []) {
+    const list = byChecklist.get(row.note_id) ?? [];
+    list.push({ id: row.id, text: row.text, checked: row.checked === 1, position: row.position });
+    byChecklist.set(row.note_id, list);
+  }
+  for (const row of labels.results ?? []) {
+    const list = byLabel.get(row.note_id) ?? [];
+    list.push(row.name);
+    byLabel.set(row.note_id, list);
+  }
+  return rows.map((row) => toNote(row, byAttachment.get(row.id), byChecklist.get(row.id), byLabel.get(row.id)));
 }
 
 async function listNotes(request: Request, env: Env): Promise<Response> {
@@ -139,8 +216,9 @@ async function listNotes(request: Request, env: Env): Promise<Response> {
   const view = params.get("view") ?? "active";
   const offset = Number(params.get("offset") ?? "0");
   const query = params.get("q")?.trim() ?? "";
+  const label = params.get("label")?.trim() ?? "";
   if ((view !== "active" && view !== "archived" && view !== "trash")
-    || !Number.isSafeInteger(offset) || offset < 0 || query.length > MAX_SEARCH_LENGTH) {
+    || !Number.isSafeInteger(offset) || offset < 0 || query.length > MAX_SEARCH_LENGTH || label.length > 100) {
     return json({ error: "一覧の指定が正しくありません。" }, 400);
   }
 
@@ -150,25 +228,50 @@ async function listNotes(request: Request, env: Env): Promise<Response> {
     conditions.push("(instr(lower(title), lower(?)) > 0 OR instr(lower(body), lower(?)) > 0 OR instr(lower(url), lower(?)) > 0)");
     bindings.push(query, query, query);
   }
+  if (label) {
+    conditions.push("EXISTS (SELECT 1 FROM note_labels nl WHERE nl.note_id = notes.id AND nl.label_key = ?)");
+    bindings.push(labelKey(label));
+  }
   const order = view === "trash" ? "deleted_at DESC, id DESC" : "pinned DESC, updated_at DESC, id DESC";
   const result = await env.DB.prepare(
     `${SELECT_NOTE} WHERE ${conditions.join(" AND ")} ORDER BY ${order} LIMIT ? OFFSET ?`,
   ).bind(...bindings, PAGE_SIZE + 1, offset).all<NoteRow>();
   const rows = result.results ?? [];
   const page = rows.slice(0, PAGE_SIZE);
-  const byNote = new Map<string, Attachment[]>();
-  if (page.length) {
-    const placeholders = page.map(() => "?").join(",");
-    const result = await env.DB.prepare(
-      `SELECT id, note_id, filename, mime_type, r2_key, created_at FROM attachments WHERE note_id IN (${placeholders}) ORDER BY created_at, id`,
-    ).bind(...page.map((row) => row.id)).all<AttachmentRow>();
-    for (const row of result.results ?? []) {
-      const attachments = byNote.get(row.note_id) ?? [];
-      attachments.push(toAttachment(row));
-      byNote.set(row.note_id, attachments);
+  return json({ notes: await withRelations(page, env), hasMore: rows.length > PAGE_SIZE });
+}
+
+async function listLabels(env: Env): Promise<Response> {
+  const result = await env.DB.prepare(
+    "SELECT l.name FROM labels l WHERE EXISTS (SELECT 1 FROM note_labels nl WHERE nl.label_key = l.name_key) ORDER BY l.name",
+  ).all<{ name: string }>();
+  return json({ labels: (result.results ?? []).map((row) => row.name) });
+}
+
+function relationStatements(noteId: string, input: NoteInput, env: Env, replace: boolean): D1PreparedStatement[] {
+  const statements: D1PreparedStatement[] = [];
+  if (input.checklist !== undefined) {
+    if (replace) statements.push(env.DB.prepare("DELETE FROM checklist_items WHERE note_id = ?").bind(noteId));
+    for (let start = 0; start < input.checklist.length; start += 20) {
+      const values = input.checklist.slice(start, start + 20);
+      const placeholders = values.map(() => "(?, ?, ?, ?, ?)").join(",");
+      const bindings = values.flatMap((item, index) => [crypto.randomUUID(), noteId, start + index, item.text, Number(item.checked)]);
+      statements.push(env.DB.prepare(
+        `INSERT INTO checklist_items (id, note_id, position, text, checked) VALUES ${placeholders}`,
+      ).bind(...bindings));
     }
   }
-  return json({ notes: page.map((row) => toNote(row, byNote.get(row.id))), hasMore: rows.length > PAGE_SIZE });
+  if (input.labels !== undefined) {
+    if (replace) statements.push(env.DB.prepare("DELETE FROM note_labels WHERE note_id = ?").bind(noteId));
+    if (input.labels.length) {
+      const placeholders = input.labels.map(() => "(?, ?)").join(",");
+      statements.push(env.DB.prepare(`INSERT OR IGNORE INTO labels (name_key, name) VALUES ${placeholders}`)
+        .bind(...input.labels.flatMap((name) => [labelKey(name), name])));
+      statements.push(env.DB.prepare(`INSERT INTO note_labels (note_id, label_key) VALUES ${placeholders}`)
+        .bind(...input.labels.flatMap((name) => [noteId, labelKey(name)])));
+    }
+  }
+  return statements;
 }
 
 async function insertNote(input: NoteInput, env: Env, timestamps?: { created_at: string; updated_at: string }): Promise<Note> {
@@ -176,10 +279,13 @@ async function insertNote(input: NoteInput, env: Env, timestamps?: { created_at:
   const now = new Date().toISOString();
   const createdAt = timestamps?.created_at ?? now;
   const updatedAt = timestamps?.updated_at ?? now;
-  await env.DB.prepare(
+  const statements = [env.DB.prepare(
     "INSERT INTO notes (id, title, body, url, pinned, archived, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  ).bind(id, input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, createdAt, updatedAt).run();
-  return { id, ...input, deleted_at: null, created_at: createdAt, updated_at: updatedAt, attachments: [] } satisfies Note;
+  ).bind(id, input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, createdAt, updatedAt),
+  ...relationStatements(id, input, env, false)];
+  await env.DB.batch(statements);
+  const row = await env.DB.prepare(`${SELECT_NOTE} WHERE id = ?`).bind(id).first<NoteRow>();
+  return (await withRelations([row!], env))[0];
 }
 
 async function createNote(request: Request, env: Env): Promise<Response> {
@@ -210,13 +316,12 @@ async function updateNote(id: string, request: Request, env: Env): Promise<Respo
   if (!input) return json({ error: "メモの内容を確認してください。" }, 400);
 
   const now = new Date().toISOString();
-  await env.DB.prepare(
+  await env.DB.batch([env.DB.prepare(
     "UPDATE notes SET title = ?, body = ?, url = ?, pinned = ?, archived = ?, color = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
-  ).bind(input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, now, id).run();
-  const result = await env.DB.prepare(
-    "SELECT id, note_id, filename, mime_type, r2_key, created_at FROM attachments WHERE note_id = ? ORDER BY created_at, id",
-  ).bind(id).all<AttachmentRow>();
-  return json({ note: { id, ...input, deleted_at: null, created_at: current.created_at, updated_at: now, attachments: (result.results ?? []).map(toAttachment) } satisfies Note });
+  ).bind(input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, now, id),
+  ...relationStatements(id, input, env, true)]);
+  const row = await env.DB.prepare(`${SELECT_NOTE} WHERE id = ?`).bind(id).first<NoteRow>();
+  return json({ note: (await withRelations([row!], env))[0] });
 }
 
 async function moveToTrash(id: string, env: Env): Promise<Response> {
@@ -406,6 +511,10 @@ export default {
       if (url.pathname === "/api/notes") {
         if (request.method === "GET") return await listNotes(request, env);
         if (request.method === "POST") return await createNote(request, env);
+      }
+
+      if (url.pathname === "/api/labels" && request.method === "GET") {
+        return await listLabels(env);
       }
 
       if (url.pathname === "/api/import/keep" && request.method === "POST") {

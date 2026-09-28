@@ -3,23 +3,25 @@ import type { ChangeEvent, FormEvent } from "react";
 import { readKeepZip } from "./keepImport";
 import type { KeepZipResult } from "./keepImport";
 import { NOTE_COLORS } from "./types";
-import type { Attachment, Note, NoteColor, NoteInput } from "./types";
+import type { Attachment, ChecklistInput, Note, NoteColor, NoteInput } from "./types";
 
 type View = "active" | "archived" | "trash";
 type NoteList = { notes: Note[]; hasMore: boolean };
 type ImportCounts = { done: number; total: number; success: number; failed: number; skipped: number };
 type ImportProgress = { notes: ImportCounts; attachments: ImportCounts };
+type NoteDraft = NoteInput & { checklist: ChecklistInput[] };
 
-const emptyNote: NoteInput = { title: "", body: "", url: "", pinned: false, archived: false, color: "default" };
+const emptyNote: NoteDraft = { title: "", body: "", url: "", pinned: false, archived: false, color: "default", checklist: [] };
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
 const COLOR_LABELS: Record<NoteColor, string> = {
   default: "なし", red: "赤", orange: "オレンジ", yellow: "黄", green: "緑", blue: "青", purple: "紫",
 };
 
-function listPath(view: View, search: string, offset: number): string {
+function listPath(view: View, search: string, label: string, offset: number): string {
   const params = new URLSearchParams({ view, offset: String(offset) });
   if (search.trim()) params.set("q", search.trim());
+  if (label) params.set("label", label);
   return `/api/notes?${params}`;
 }
 
@@ -29,6 +31,14 @@ function notePreview(note: Note) {
     {note.pinned && <span className="pin-label">📌 ピン留め</span>}
     {note.title && <strong>{note.title}</strong>}
     {note.body && <span className="body-preview">{note.body}</span>}
+    {note.checklist.length > 0 && <span className="checklist-preview">
+      {note.checklist.map((item) => <span className={item.checked ? "checked" : ""} key={item.id}>
+        {item.checked ? "☑" : "☐"} {item.text}
+      </span>)}
+    </span>}
+    {note.labels.length > 0 && <span className="label-list">
+      {note.labels.map((label) => <span className="label-chip" key={label}>{label}</span>)}
+    </span>}
     {imageAttachments.length > 0 && (
       <span className="card-photo">
         <img src={imageAttachments[0].url} alt="" loading="lazy" />
@@ -59,6 +69,8 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 export default function App() {
   const [view, setView] = useState<View>("active");
   const [search, setSearch] = useState("");
+  const [labelFilter, setLabelFilter] = useState("");
+  const [availableLabels, setAvailableLabels] = useState<string[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -66,7 +78,8 @@ export default function App() {
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<NoteInput | null>(null);
+  const [draft, setDraft] = useState<NoteDraft | null>(null);
+  const [labelText, setLabelText] = useState("");
   const [editorAttachments, setEditorAttachments] = useState<Attachment[]>([]);
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState("");
@@ -78,7 +91,7 @@ export default function App() {
     setNotes([]);
     setHasMore(false);
     setError("");
-    api<NoteList>(listPath(view, search, 0), { signal: controller.signal })
+    api<NoteList>(listPath(view, search, labelFilter, 0), { signal: controller.signal })
       .then((data) => {
         setNotes(data.notes);
         setHasMore(data.hasMore);
@@ -90,14 +103,25 @@ export default function App() {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [view, search, reload]);
+  }, [view, search, labelFilter, reload]);
+
+  useEffect(() => {
+    api<{ labels: string[] }>("/api/labels")
+      .then((data) => {
+        setAvailableLabels(data.labels);
+        setLabelFilter((current) => current && !data.labels.includes(current) ? "" : current);
+      })
+      .catch(() => setAvailableLabels([]));
+  }, [reload]);
 
   function openEditor(note?: Note) {
     setError("");
     setEditingId(note?.id ?? null);
     setEditorAttachments(note?.attachments ?? []);
+    setLabelText(note?.labels.join("\n") ?? "");
     setDraft(note
-      ? { title: note.title, body: note.body, url: note.url, pinned: note.pinned, archived: note.archived, color: note.color }
+      ? { title: note.title, body: note.body, url: note.url, pinned: note.pinned, archived: note.archived, color: note.color,
+        checklist: note.checklist.map(({ text, checked }) => ({ text, checked })) }
       : { ...emptyNote, archived: view === "archived" });
   }
 
@@ -105,7 +129,7 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const data = await api<NoteList>(listPath(view, search, notes.length));
+      const data = await api<NoteList>(listPath(view, search, labelFilter, notes.length));
       setNotes((current) => [...current, ...data.notes]);
       setHasMore(data.hasMore);
     } catch (cause) {
@@ -121,10 +145,12 @@ export default function App() {
     setWorking(true);
     setError("");
     try {
+      const labels = labelText.split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
+      const input = { ...draft, labels };
       if (editingId) {
-        await api(`/api/notes/${editingId}`, { method: "PATCH", body: JSON.stringify(draft) });
+        await api(`/api/notes/${editingId}`, { method: "PATCH", body: JSON.stringify(input) });
       } else {
-        await api("/api/notes", { method: "POST", body: JSON.stringify(draft) });
+        await api("/api/notes", { method: "POST", body: JSON.stringify(input) });
       }
       setDraft(null);
       setReload((value) => value + 1);
@@ -326,6 +352,12 @@ export default function App() {
         <label className="search-field">検索
           <input type="search" value={search} maxLength={200} placeholder="タイトル・本文・URL" onChange={(event) => setSearch(event.target.value)} />
         </label>
+        <label className="label-filter">ラベル
+          <select value={labelFilter} onChange={(event) => setLabelFilter(event.target.value)}>
+            <option value="">すべて</option>
+            {availableLabels.map((name) => <option value={name} key={name}>{name}</option>)}
+          </select>
+        </label>
       </div>
 
       <details className="import-panel">
@@ -343,7 +375,7 @@ export default function App() {
       </details>
 
       {error && !draft && <p className="error" role="alert">{error}</p>}
-      {!loading && notes.length === 0 && <p className="empty">{search.trim() ? "検索結果はありません。" : view === "active" ? "メモはまだありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}
+      {!loading && notes.length === 0 && <p className="empty">{search.trim() || labelFilter ? "該当するメモはありません。" : view === "active" ? "メモはまだありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}
 
       <section className="grid" aria-label={view === "active" ? "メモ一覧" : view === "archived" ? "アーカイブ一覧" : "ゴミ箱一覧"}>
         {notes.map((note) => (
@@ -378,6 +410,20 @@ export default function App() {
             {error && <p className="error" role="alert">{error}</p>}
             <label>タイトル<input value={draft.title} maxLength={300} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
             <label>本文<textarea value={draft.body} maxLength={100000} rows={9} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></label>
+            <section className="checklist-editor" aria-label="チェックリスト">
+              <div className="section-heading"><strong>チェックリスト</strong>
+                <button type="button" onClick={() => setDraft({ ...draft, checklist: [...draft.checklist, { text: "", checked: false }] })} disabled={draft.checklist.length >= 500}>＋ 項目を追加</button>
+              </div>
+              {draft.checklist.map((item, index) => <div className="checklist-row" key={index}>
+                <input type="checkbox" checked={item.checked} aria-label={`${index + 1}番目の項目をチェック`}
+                  onChange={(event) => setDraft({ ...draft, checklist: draft.checklist.map((entry, position) => position === index ? { ...entry, checked: event.target.checked } : entry) })} />
+                <input value={item.text} maxLength={10000} aria-label={`${index + 1}番目の項目`} placeholder="項目"
+                  onChange={(event) => setDraft({ ...draft, checklist: draft.checklist.map((entry, position) => position === index ? { ...entry, text: event.target.value } : entry) })} />
+                <button type="button" aria-label={`${index + 1}番目の項目を削除`}
+                  onClick={() => setDraft({ ...draft, checklist: draft.checklist.filter((_, position) => position !== index) })}>削除</button>
+              </div>)}
+            </section>
+            <label>ラベル（1行に1件）<textarea value={labelText} rows={2} onChange={(event) => setLabelText(event.target.value)} placeholder="仕事" /></label>
             <label>URL<input type="url" value={draft.url} maxLength={2000} placeholder="https://" onChange={(event) => setDraft({ ...draft, url: event.target.value })} /></label>
             <label>色<select value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value as NoteColor })}>
               {NOTE_COLORS.map((color) => <option value={color} key={color}>{COLOR_LABELS[color]}</option>)}
@@ -407,7 +453,7 @@ export default function App() {
             ) : <p className="image-hint">画像はメモを保存してから追加できます。</p>}
             <div className="editor-actions">
               {editingId && <button type="button" className="danger" onClick={remove} disabled={working}>ゴミ箱へ</button>}
-              <button type="submit" className="primary" disabled={working || !(draft.title.trim() || draft.body.trim() || draft.url.trim())}>{working ? "保存中…" : "保存"}</button>
+              <button type="submit" className="primary" disabled={working || !(editingId || draft.title.trim() || draft.body.trim() || draft.url.trim() || draft.checklist.length)}>{working ? "保存中…" : "保存"}</button>
             </div>
           </form>
         </div>

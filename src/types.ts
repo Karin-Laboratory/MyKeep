@@ -6,6 +6,15 @@ export interface Attachment {
   created_at: string;
 }
 
+export interface ChecklistItem {
+  id: string;
+  text: string;
+  checked: boolean;
+  position: number;
+}
+
+export type ChecklistInput = Pick<ChecklistItem, "text" | "checked">;
+
 export const NOTE_COLORS = ["default", "red", "orange", "yellow", "green", "blue", "purple"] as const;
 export type NoteColor = (typeof NOTE_COLORS)[number];
 
@@ -21,6 +30,11 @@ export interface Note {
   created_at: string;
   updated_at: string;
   attachments: Attachment[];
+  checklist: ChecklistItem[];
+  labels: string[];
 }
 
-export type NoteInput = Pick<Note, "title" | "body" | "url" | "pinned" | "archived" | "color">;
+export type NoteInput = Pick<Note, "title" | "body" | "url" | "pinned" | "archived" | "color"> & {
+  checklist?: ChecklistInput[];
+  labels?: string[];
+};

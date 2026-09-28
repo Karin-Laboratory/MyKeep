@@ -15,6 +15,8 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 700; }
 .tabs button.selected { background: #fff2c5; color: #282216; font-weight: 700; }
 .search-field { display: flex; align-items: center; gap: 8px; color: #555; font-size: .9rem; }
 .search-field input { min-width: 230px; border: 1px solid #cecec8; border-radius: 8px; padding: 8px 10px; background: white; }
+.label-filter { display: flex; align-items: center; gap: 8px; color: #555; font-size: .9rem; }
+.label-filter select { max-width: 180px; border: 1px solid #cecec8; border-radius: 8px; padding: 8px 10px; background: white; }
 .import-panel { margin: 0 0 22px; border: 1px solid #e0dfd8; border-radius: 9px; background: white; padding: 10px 14px; }
 .import-panel summary { cursor: pointer; font-weight: 600; }
 .import-content { display: grid; gap: 8px; padding: 12px 0 2px; font-size: .9rem; }
@@ -34,6 +36,11 @@ button.card-content:hover { background: #ffffff70; }
 .card-content strong { font-size: 1rem; overflow-wrap: anywhere; }
 .pin-label { font-size: .76rem; color: #6a603d; }
 .body-preview { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; max-height: 12em; overflow: hidden; }
+.checklist-preview { display: grid; gap: 3px; max-height: 12em; overflow: hidden; line-height: 1.4; }
+.checklist-preview span { overflow-wrap: anywhere; }
+.checklist-preview .checked { color: #777; text-decoration: line-through; }
+.label-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.label-chip { border-radius: 999px; background: #e8e8e2; padding: 2px 8px; font-size: .75rem; overflow-wrap: anywhere; }
 .card-photo { position: relative; display: block; width: 100%; aspect-ratio: 4 / 3; overflow: hidden; border-radius: 8px; background: #f1f1ed; }
 .card-photo img { width: 100%; height: 100%; object-fit: cover; }
 .photo-count { position: absolute; right: 8px; bottom: 8px; border-radius: 6px; background: #242424c9; color: white; padding: 3px 7px; font-size: .8rem; }
@@ -55,6 +62,12 @@ h2 { margin: 0; font-size: 1.15rem; }
 .editor textarea { resize: vertical; min-height: 120px; }
 .editor-options { display: flex; gap: 22px; flex-wrap: wrap; }
 .editor-options label { display: inline-flex; align-items: center; gap: 5px; }
+.checklist-editor { display: grid; gap: 8px; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: .9rem; }
+.section-heading button, .checklist-row button { border: 0; background: transparent; color: #575757; padding: 5px; }
+.checklist-row { display: flex; align-items: center; gap: 8px; }
+.checklist-row input[type="text"], .checklist-row input:not([type]) { flex: 1; min-width: 0; }
+.checklist-row button { color: #a52f2f; }
 .image-section { display: grid; gap: 12px; }
 .upload-label { display: grid; gap: 6px; font-size: .9rem; font-weight: 600; }
 .upload-label input { max-width: 100%; font-weight: 400; }
@@ -71,6 +84,7 @@ h2 { margin: 0; font-size: 1.15rem; }
   .topbar { min-height: 66px; }
   .search-field { width: 100%; }
   .search-field input { min-width: 0; flex: 1; }
+  .label-filter { width: 100%; }
   .grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 12px; }
   .editor { padding: 18px; }
 }
