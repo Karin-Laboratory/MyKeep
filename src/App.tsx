@@ -1,13 +1,37 @@
 import { useEffect, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
-import type { Attachment, Note, NoteInput } from "./types";
+import { NOTE_COLORS } from "./types";
+import type { Attachment, Note, NoteColor, NoteInput } from "./types";
 
-type View = "active" | "archived";
+type View = "active" | "archived" | "trash";
 type NoteList = { notes: Note[]; hasMore: boolean };
 
-const emptyNote: NoteInput = { title: "", body: "", url: "", pinned: false, archived: false };
+const emptyNote: NoteInput = { title: "", body: "", url: "", pinned: false, archived: false, color: "default" };
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
+const COLOR_LABELS: Record<NoteColor, string> = {
+  default: "なし", red: "赤", orange: "オレンジ", yellow: "黄", green: "緑", blue: "青", purple: "紫",
+};
+
+function listPath(view: View, search: string, offset: number): string {
+  const params = new URLSearchParams({ view, offset: String(offset) });
+  if (search.trim()) params.set("q", search.trim());
+  return `/api/notes?${params}`;
+}
+
+function notePreview(note: Note) {
+  return <>
+    {note.pinned && <span className="pin-label">📌 ピン留め</span>}
+    {note.title && <strong>{note.title}</strong>}
+    {note.body && <span className="body-preview">{note.body}</span>}
+    {note.attachments.length > 0 && (
+      <span className="card-photo">
+        <img src={note.attachments[0].url} alt="" loading="lazy" />
+        {note.attachments.length > 1 && <span className="photo-count">+{note.attachments.length - 1}</span>}
+      </span>
+    )}
+  </>;
+}
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const headers = new Headers(options?.headers);
@@ -28,6 +52,7 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 
 export default function App() {
   const [view, setView] = useState<View>("active");
+  const [search, setSearch] = useState("");
   const [notes, setNotes] = useState<Note[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -44,7 +69,7 @@ export default function App() {
     setNotes([]);
     setHasMore(false);
     setError("");
-    api<NoteList>(`/api/notes?view=${view}&offset=0`, { signal: controller.signal })
+    api<NoteList>(listPath(view, search, 0), { signal: controller.signal })
       .then((data) => {
         setNotes(data.notes);
         setHasMore(data.hasMore);
@@ -56,14 +81,14 @@ export default function App() {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [view, reload]);
+  }, [view, search, reload]);
 
   function openEditor(note?: Note) {
     setError("");
     setEditingId(note?.id ?? null);
     setEditorAttachments(note?.attachments ?? []);
     setDraft(note
-      ? { title: note.title, body: note.body, url: note.url, pinned: note.pinned, archived: note.archived }
+      ? { title: note.title, body: note.body, url: note.url, pinned: note.pinned, archived: note.archived, color: note.color }
       : { ...emptyNote, archived: view === "archived" });
   }
 
@@ -71,7 +96,7 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const data = await api<NoteList>(`/api/notes?view=${view}&offset=${notes.length}`);
+      const data = await api<NoteList>(listPath(view, search, notes.length));
       setNotes((current) => [...current, ...data.notes]);
       setHasMore(data.hasMore);
     } catch (cause) {
@@ -116,7 +141,7 @@ export default function App() {
   }
 
   async function remove() {
-    if (!editingId || working || !window.confirm("このメモを完全に削除しますか？")) return;
+    if (!editingId || working || !window.confirm("このメモをゴミ箱に移動しますか？")) return;
     setWorking(true);
     setError("");
     try {
@@ -125,6 +150,34 @@ export default function App() {
       setReload((value) => value + 1);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "削除に失敗しました。");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function restore(note: Note) {
+    if (working) return;
+    setWorking(true);
+    setError("");
+    try {
+      await api(`/api/notes/${note.id}/restore`, { method: "POST" });
+      setReload((value) => value + 1);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "復元に失敗しました。");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function permanentlyRemove(note: Note) {
+    if (working || !window.confirm("このメモと添付画像を完全に削除しますか？元に戻せません。")) return;
+    setWorking(true);
+    setError("");
+    try {
+      await api(`/api/notes/${note.id}/permanent`, { method: "DELETE" });
+      setReload((value) => value + 1);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "完全削除に失敗しました。");
     } finally {
       setWorking(false);
     }
@@ -186,35 +239,38 @@ export default function App() {
     <main className="app">
       <header className="topbar">
         <h1>MyKeep</h1>
-        <button className="primary" onClick={() => openEditor()}>＋ 新規メモ</button>
+        {view !== "trash" && <button className="primary" onClick={() => openEditor()}>＋ 新規メモ</button>}
       </header>
 
-      <nav className="tabs" aria-label="メモの表示">
-        <button className={view === "active" ? "selected" : ""} onClick={() => setView("active")}>メモ</button>
-        <button className={view === "archived" ? "selected" : ""} onClick={() => setView("archived")}>アーカイブ</button>
-      </nav>
+      <div className="browse-bar">
+        <nav className="tabs" aria-label="メモの表示">
+          <button className={view === "active" ? "selected" : ""} onClick={() => setView("active")}>メモ</button>
+          <button className={view === "archived" ? "selected" : ""} onClick={() => setView("archived")}>アーカイブ</button>
+          <button className={view === "trash" ? "selected" : ""} onClick={() => setView("trash")}>ゴミ箱</button>
+        </nav>
+        <label className="search-field">検索
+          <input type="search" value={search} maxLength={200} placeholder="タイトル・本文・URL" onChange={(event) => setSearch(event.target.value)} />
+        </label>
+      </div>
 
       {error && !draft && <p className="error" role="alert">{error}</p>}
-      {!loading && notes.length === 0 && <p className="empty">{view === "active" ? "メモはまだありません。" : "アーカイブはありません。"}</p>}
+      {!loading && notes.length === 0 && <p className="empty">{search.trim() ? "検索結果はありません。" : view === "active" ? "メモはまだありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}
 
-      <section className="grid" aria-label={view === "active" ? "メモ一覧" : "アーカイブ一覧"}>
+      <section className="grid" aria-label={view === "active" ? "メモ一覧" : view === "archived" ? "アーカイブ一覧" : "ゴミ箱一覧"}>
         {notes.map((note) => (
-          <article className="card" key={note.id}>
-            <button className="card-content" onClick={() => openEditor(note)} aria-label={`${note.title || "無題のメモ"}を編集`}>
-              {note.pinned && <span className="pin-label">📌 ピン留め</span>}
-              {note.title && <strong>{note.title}</strong>}
-              {note.body && <span className="body-preview">{note.body}</span>}
-              {note.attachments.length > 0 && (
-                <span className="card-photo">
-                  <img src={note.attachments[0].url} alt="" loading="lazy" />
-                  {note.attachments.length > 1 && <span className="photo-count">+{note.attachments.length - 1}</span>}
-                </span>
-              )}
-            </button>
+          <article className="card" data-color={note.color} key={note.id}>
+            {view === "trash"
+              ? <div className="card-content">{notePreview(note)}</div>
+              : <button className="card-content" onClick={() => openEditor(note)} aria-label={`${note.title || "無題のメモ"}を編集`}>{notePreview(note)}</button>}
             {note.url && <a className="note-link" href={note.url} target="_blank" rel="noopener noreferrer">{note.url}</a>}
             <div className="card-actions">
-              <button disabled={working} onClick={() => updateFlag(note, "pinned")}>{note.pinned ? "ピン解除" : "ピン留め"}</button>
-              <button disabled={working} onClick={() => updateFlag(note, "archived")}>{note.archived ? "戻す" : "アーカイブ"}</button>
+              {view === "trash" ? <>
+                <button disabled={working} onClick={() => restore(note)}>復元</button>
+                <button className="danger" disabled={working} onClick={() => permanentlyRemove(note)}>完全削除</button>
+              </> : <>
+                <button disabled={working} onClick={() => updateFlag(note, "pinned")}>{note.pinned ? "ピン解除" : "ピン留め"}</button>
+                <button disabled={working} onClick={() => updateFlag(note, "archived")}>{note.archived ? "戻す" : "アーカイブ"}</button>
+              </>}
             </div>
           </article>
         ))}
@@ -225,7 +281,7 @@ export default function App() {
 
       {draft && (
         <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !working) setDraft(null); }}>
-          <form className="editor" onSubmit={save} aria-label={editingId ? "メモを編集" : "新規メモ"}>
+          <form className="editor" data-color={draft.color} onSubmit={save} aria-label={editingId ? "メモを編集" : "新規メモ"}>
             <div className="editor-heading">
               <h2>{editingId ? "メモを編集" : "新規メモ"}</h2>
               <button type="button" className="close" onClick={() => setDraft(null)} disabled={working} aria-label="閉じる">×</button>
@@ -234,6 +290,9 @@ export default function App() {
             <label>タイトル<input value={draft.title} maxLength={300} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
             <label>本文<textarea value={draft.body} maxLength={100000} rows={9} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></label>
             <label>URL<input type="url" value={draft.url} maxLength={2000} placeholder="https://" onChange={(event) => setDraft({ ...draft, url: event.target.value })} /></label>
+            <label>色<select value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value as NoteColor })}>
+              {NOTE_COLORS.map((color) => <option value={color} key={color}>{COLOR_LABELS[color]}</option>)}
+            </select></label>
             <div className="editor-options">
               <label><input type="checkbox" checked={draft.pinned} onChange={(event) => setDraft({ ...draft, pinned: event.target.checked })} /> ピン留め</label>
               <label><input type="checkbox" checked={draft.archived} onChange={(event) => setDraft({ ...draft, archived: event.target.checked })} /> アーカイブ</label>
@@ -256,7 +315,7 @@ export default function App() {
               </section>
             ) : <p className="image-hint">画像はメモを保存してから追加できます。</p>}
             <div className="editor-actions">
-              {editingId && <button type="button" className="danger" onClick={remove} disabled={working}>削除</button>}
+              {editingId && <button type="button" className="danger" onClick={remove} disabled={working}>ゴミ箱へ</button>}
               <button type="submit" className="primary" disabled={working || !(draft.title.trim() || draft.body.trim() || draft.url.trim())}>{working ? "保存中…" : "保存"}</button>
             </div>
           </form>
