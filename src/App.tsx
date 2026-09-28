@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { readKeepZip } from "./keepImport";
+import type { KeepZipResult } from "./keepImport";
 import { NOTE_COLORS } from "./types";
 import type { Attachment, Note, NoteColor, NoteInput } from "./types";
 
 type View = "active" | "archived" | "trash";
 type NoteList = { notes: Note[]; hasMore: boolean };
-type ImportProgress = { done: number; total: number; success: number; failed: number; skipped: number };
+type ImportCounts = { done: number; total: number; success: number; failed: number; skipped: number };
+type ImportProgress = { notes: ImportCounts; attachments: ImportCounts };
 
 const emptyNote: NoteInput = { title: "", body: "", url: "", pinned: false, archived: false, color: "default" };
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -22,16 +24,18 @@ function listPath(view: View, search: string, offset: number): string {
 }
 
 function notePreview(note: Note) {
+  const imageAttachments = note.attachments.filter((item) => IMAGE_TYPES.includes(item.mime_type));
   return <>
     {note.pinned && <span className="pin-label">📌 ピン留め</span>}
     {note.title && <strong>{note.title}</strong>}
     {note.body && <span className="body-preview">{note.body}</span>}
-    {note.attachments.length > 0 && (
+    {imageAttachments.length > 0 && (
       <span className="card-photo">
-        <img src={note.attachments[0].url} alt="" loading="lazy" />
-        {note.attachments.length > 1 && <span className="photo-count">+{note.attachments.length - 1}</span>}
+        <img src={imageAttachments[0].url} alt="" loading="lazy" />
+        {imageAttachments.length > 1 && <span className="photo-count">+{imageAttachments.length - 1}</span>}
       </span>
     )}
+    {note.attachments.length > imageAttachments.length && <span className="pin-label">📎 添付ファイル {note.attachments.length - imageAttachments.length}件</span>}
   </>;
 }
 
@@ -247,32 +251,61 @@ export default function App() {
     setImporting(true);
     setImportMessage("ZIPを解析中…");
     setImportProgress(null);
+    let extracted: KeepZipResult | null = null;
     try {
-      const extracted = await readKeepZip(file);
+      extracted = await readKeepZip(file);
       const progress: ImportProgress = {
-        done: extracted.failed + extracted.skipped,
-        total: extracted.total,
-        success: 0,
-        failed: extracted.failed,
-        skipped: extracted.skipped,
+        notes: { done: extracted.failed + extracted.skipped, total: extracted.total,
+          success: 0, failed: extracted.failed, skipped: extracted.skipped },
+        attachments: { done: 0, total: extracted.attachmentTotal, success: 0, failed: 0, skipped: 0 },
       };
-      setImportProgress({ ...progress });
+      setImportProgress({ notes: { ...progress.notes }, attachments: { ...progress.attachments } });
       setImportMessage("インポート中…");
-      for (const note of extracted.notes) {
+      for (const record of extracted.notes) {
+        let noteId: string | null = null;
         try {
-          await api("/api/import/keep", { method: "POST", body: JSON.stringify(note) });
-          progress.success += 1;
+          const { note } = await api<{ note: Note }>("/api/import/keep", { method: "POST", body: JSON.stringify(record.note) });
+          noteId = note.id;
+          progress.notes.success += 1;
         } catch {
-          progress.failed += 1;
+          progress.notes.failed += 1;
         }
-        progress.done += 1;
-        setImportProgress({ ...progress });
+        if (noteId) {
+          for (const reference of record.attachments) {
+            try {
+              const attachment = await extracted.readAttachment(record.sourcePath, reference);
+              if (!attachment) progress.attachments.skipped += 1;
+              else {
+                await api(`/api/notes/${noteId}/attachments`, {
+                  method: "POST",
+                  body: attachment.blob,
+                  headers: { "Content-Type": attachment.mime, "X-File-Name": encodeURIComponent(attachment.filename) },
+                });
+                progress.attachments.success += 1;
+              }
+            } catch {
+              progress.attachments.failed += 1;
+            }
+            progress.attachments.done += 1;
+            setImportProgress({ notes: { ...progress.notes }, attachments: { ...progress.attachments } });
+          }
+        } else {
+          progress.attachments.skipped += record.attachments.length;
+          progress.attachments.done += record.attachments.length;
+        }
+        progress.notes.done += 1;
+        setImportProgress({ notes: { ...progress.notes }, attachments: { ...progress.attachments } });
       }
       setImportMessage("インポート完了");
       setReload((value) => value + 1);
     } catch (cause) {
       setImportMessage(cause instanceof Error ? cause.message : "インポートに失敗しました。");
     } finally {
+      try {
+        if (extracted) await extracted.close();
+      } catch {
+        // 読み取りは終わっているため、画面の操作を戻す。
+      }
       setImporting(false);
     }
   }
@@ -302,8 +335,10 @@ export default function App() {
             <input type="file" accept=".zip,application/zip" onChange={importZip} disabled={importing} />
           </label>
           {importMessage && <p role="status">{importMessage}</p>}
-          {importProgress && <p>進捗 {importProgress.done} / {importProgress.total}<br />
-            成功 {importProgress.success}　失敗 {importProgress.failed}　スキップ {importProgress.skipped}</p>}
+          {importProgress && <p>メモ: {importProgress.notes.done} / {importProgress.notes.total}<br />
+            成功 {importProgress.notes.success}　失敗 {importProgress.notes.failed}　スキップ {importProgress.notes.skipped}<br />
+            画像・添付: {importProgress.attachments.done} / {importProgress.attachments.total}<br />
+            成功 {importProgress.attachments.success}　失敗 {importProgress.attachments.failed}　スキップ {importProgress.attachments.skipped}</p>}
         </div>
       </details>
 
@@ -352,7 +387,7 @@ export default function App() {
               <label><input type="checkbox" checked={draft.archived} onChange={(event) => setDraft({ ...draft, archived: event.target.checked })} /> アーカイブ</label>
             </div>
             {editingId ? (
-              <section className="image-section" aria-label="添付画像">
+              <section className="image-section" aria-label="添付ファイル">
                 <label className="upload-label">画像を追加
                   <input type="file" accept={IMAGE_TYPES.join(",")} multiple onChange={addImages} disabled={working} />
                 </label>
@@ -360,7 +395,9 @@ export default function App() {
                   <div className="editor-images">
                     {editorAttachments.map((attachment) => (
                       <div className="editor-image" key={attachment.id}>
-                        <img src={attachment.url} alt={attachment.filename} loading="lazy" />
+                        {IMAGE_TYPES.includes(attachment.mime_type)
+                          ? <img src={attachment.url} alt={attachment.filename} loading="lazy" />
+                          : <a href={attachment.url} download={attachment.filename}>{attachment.filename}</a>}
                         <button type="button" onClick={() => removeImage(attachment)} disabled={working} aria-label={`${attachment.filename}を削除`}>削除</button>
                       </div>
                     ))}

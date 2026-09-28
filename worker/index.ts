@@ -31,6 +31,7 @@ const MAX_IMPORT_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_CAPTURE_BYTES = MAX_IMAGE_BYTES + 1024 * 1024;
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
+const MIME_TYPE_PATTERN = /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/;
 const COLOR_SET = new Set<string>(NOTE_COLORS);
 
 function json(data: unknown, status = 200): Response {
@@ -105,7 +106,7 @@ async function readInput(request: Request, maxBytes = MAX_REQUEST_BYTES): Promis
   }
 }
 
-function parseInput(value: unknown, current?: NoteRow): NoteInput | null {
+function parseInput(value: unknown, current?: NoteRow, allowEmpty = false): NoteInput | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const input = value as Record<string, unknown>;
   const title = input.title ?? current?.title ?? "";
@@ -120,7 +121,7 @@ function parseInput(value: unknown, current?: NoteRow): NoteInput | null {
   if (typeof url !== "string" || url.length > 2_000) return null;
   if (typeof pinned !== "boolean" || typeof archived !== "boolean") return null;
   if (typeof color !== "string" || !COLOR_SET.has(color)) return null;
-  if (!title.trim() && !body.trim() && !url.trim()) return null;
+  if (!title.trim() && !body.trim() && !url.trim() && !allowEmpty) return null;
 
   if (url) {
     try {
@@ -189,7 +190,7 @@ async function createNote(request: Request, env: Env): Promise<Response> {
 
 async function importKeepNote(request: Request, env: Env): Promise<Response> {
   const value = await readInput(request, MAX_IMPORT_BYTES);
-  const input = parseInput(value);
+  const input = parseInput(value, undefined, true);
   if (!input || !value || typeof value !== "object" || Array.isArray(value)) {
     return json({ error: "インポートするメモを確認してください。" }, 400);
   }
@@ -269,7 +270,9 @@ async function uploadAttachment(noteId: string, request: Request, env: Env): Pro
   if (!note) return json({ error: "メモが見つかりません。" }, 404);
 
   const mime = request.headers.get("Content-Type")?.toLowerCase() ?? "";
-  if (!IMAGE_TYPES.has(mime)) return json({ error: "対応していない画像形式です。" }, 415);
+  if (!MIME_TYPE_PATTERN.test(mime) || mime.length > 100) {
+    return json({ error: "添付ファイルの形式を確認してください。" }, 415);
+  }
 
   let filename: string;
   try {
@@ -280,17 +283,17 @@ async function uploadAttachment(noteId: string, request: Request, env: Env): Pro
   if (!validFilename(filename)) return json({ error: "ファイル名を確認してください。" }, 400);
 
   const contentLength = Number(request.headers.get("Content-Length") ?? "0");
-  if (contentLength > MAX_IMAGE_BYTES) return json({ error: "画像は20MB以下にしてください。" }, 413);
+  if (contentLength > MAX_IMAGE_BYTES) return json({ error: "添付ファイルは20MB以下にしてください。" }, 413);
   let bytes: Uint8Array;
   try {
     bytes = await readBytes(request, MAX_IMAGE_BYTES);
   } catch (error) {
     if (error instanceof Error && error.message === "body_too_large") {
-      return json({ error: "画像は20MB以下にしてください。" }, 413);
+      return json({ error: "添付ファイルは20MB以下にしてください。" }, 413);
     }
     throw error;
   }
-  if (!bytes.length) return json({ error: "画像が空です。" }, 400);
+  if (!bytes.length) return json({ error: "添付ファイルが空です。" }, 400);
   return json({ attachment: await persistAttachment(noteId, filename, mime, bytes, env) }, 201);
 }
 
@@ -355,20 +358,24 @@ async function captureNote(request: Request, env: Env): Promise<Response> {
 
 async function getAttachment(noteId: string, attachmentId: string, env: Env): Promise<Response> {
   const row = await env.DB.prepare(
-    "SELECT r2_key, mime_type FROM attachments WHERE id = ? AND note_id = ?",
-  ).bind(attachmentId, noteId).first<Pick<AttachmentRow, "r2_key" | "mime_type">>();
+    "SELECT r2_key, mime_type, filename FROM attachments WHERE id = ? AND note_id = ?",
+  ).bind(attachmentId, noteId).first<Pick<AttachmentRow, "r2_key" | "mime_type" | "filename">>();
   if (!row) return json({ error: "画像が見つかりません。" }, 404);
   const object = await env.IMAGES.get(row.r2_key);
   if (!object || !("body" in object)) return json({ error: "画像が見つかりません。" }, 404);
-  return new Response(object.body, {
-    headers: {
-      "Content-Type": row.mime_type,
-      "Content-Length": String(object.size),
-      "Cache-Control": "private, max-age=300",
-      "X-Content-Type-Options": "nosniff",
-      "ETag": object.httpEtag,
-    },
+  const headers = new Headers({
+    "Content-Type": IMAGE_TYPES.has(row.mime_type) ? row.mime_type : "application/octet-stream",
+    "Content-Length": String(object.size),
+    "Cache-Control": "private, max-age=300",
+    "X-Content-Type-Options": "nosniff",
+    "ETag": object.httpEtag,
   });
+  if (!IMAGE_TYPES.has(row.mime_type)) {
+    const encoded = encodeURIComponent(row.filename).replace(/[!'()*]/g, (character) =>
+      `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+    headers.set("Content-Disposition", `attachment; filename*=UTF-8''${encoded}`);
+  }
+  return new Response(object.body, { headers });
 }
 
 async function deleteAttachment(noteId: string, attachmentId: string, env: Env): Promise<Response> {

@@ -61,6 +61,7 @@ h2 { margin: 0; font-size: 1.15rem; }
 .editor-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
 .editor-image { min-width: 0; display: grid; gap: 5px; }
 .editor-image img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 7px; background: #f1f1ed; }
+.editor-image a { overflow-wrap: anywhere; color: #225fb5; font-size: .85rem; }
 .editor-image button { justify-self: start; border: 0; background: transparent; color: #a52f2f; padding: 5px 0; }
 .image-hint { margin: 0; color: #777; font-size: .84rem; }
 .editor-actions { display: flex; justify-content: flex-end; gap: 10px; }
