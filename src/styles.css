@@ -1,0 +1,57 @@
+:root { font-family: system-ui, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif; color: #242424; background: #f8f8f6; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input, textarea { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: .55; }
+.app { max-width: 1200px; margin: 0 auto; padding: 0 20px 48px; }
+.topbar { min-height: 76px; display: flex; justify-content: space-between; align-items: center; gap: 16px; border-bottom: 1px solid #e7e7e1; }
+h1 { margin: 0; font-size: 1.35rem; font-weight: 700; }
+.primary { border: 0; border-radius: 9px; background: #f4c84c; color: #242424; padding: 10px 16px; font-weight: 700; }
+.primary:hover:not(:disabled) { background: #eebd31; }
+.tabs { display: flex; gap: 8px; padding: 18px 0 22px; }
+.tabs button { border: 0; background: transparent; padding: 8px 14px; border-radius: 8px; color: #666; }
+.tabs button.selected { background: #fff2c5; color: #282216; font-weight: 700; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(245px, 1fr)); gap: 16px; align-items: start; }
+.card { min-width: 0; border: 1px solid #dddcd5; border-radius: 12px; background: #fff; box-shadow: 0 2px 5px #00000008; overflow: hidden; }
+.card-content { display: flex; width: 100%; flex-direction: column; gap: 8px; text-align: left; border: 0; background: transparent; color: inherit; padding: 18px 18px 8px; min-height: 74px; }
+.card-content:hover { background: #fffdf5; }
+.card-content strong { font-size: 1rem; overflow-wrap: anywhere; }
+.pin-label { font-size: .76rem; color: #6a603d; }
+.body-preview { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; max-height: 12em; overflow: hidden; }
+.card-photo { position: relative; display: block; width: 100%; aspect-ratio: 4 / 3; overflow: hidden; border-radius: 8px; background: #f1f1ed; }
+.card-photo img { width: 100%; height: 100%; object-fit: cover; }
+.photo-count { position: absolute; right: 8px; bottom: 8px; border-radius: 6px; background: #242424c9; color: white; padding: 3px 7px; font-size: .8rem; }
+.note-link { display: block; margin: 2px 18px 12px; font-size: .82rem; color: #225fb5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-actions { display: flex; gap: 8px; padding: 8px 12px 12px; }
+.card-actions button { border: 0; border-radius: 7px; background: transparent; color: #555; padding: 7px; font-size: .84rem; }
+.card-actions button:hover:not(:disabled) { background: #f1f1ed; }
+.empty, .status { color: #777; text-align: center; margin: 70px 0; }
+.more { display: block; margin: 28px auto 0; border: 1px solid #d2d2ca; border-radius: 9px; background: white; padding: 10px 18px; }
+.error { color: #972e2e; background: #fff0ef; border-radius: 8px; padding: 10px 14px; }
+.overlay { position: fixed; inset: 0; z-index: 10; background: #0007; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.editor { width: min(100%, 600px); max-height: calc(100vh - 32px); overflow-y: auto; border-radius: 14px; background: #fff; padding: 22px; box-shadow: 0 18px 55px #0003; display: grid; gap: 16px; }
+.editor-heading { display: flex; justify-content: space-between; align-items: center; }
+h2 { margin: 0; font-size: 1.15rem; }
+.close { border: 0; background: transparent; font-size: 1.8rem; line-height: 1; }
+.editor > label { display: grid; gap: 6px; font-size: .9rem; font-weight: 600; }
+.editor input:not([type="checkbox"]), .editor textarea { width: 100%; border: 1px solid #cecec8; border-radius: 8px; padding: 10px; font-weight: 400; color: #242424; background: #fff; }
+.editor textarea { resize: vertical; min-height: 120px; }
+.editor-options { display: flex; gap: 22px; flex-wrap: wrap; }
+.editor-options label { display: inline-flex; align-items: center; gap: 5px; }
+.image-section { display: grid; gap: 12px; }
+.upload-label { display: grid; gap: 6px; font-size: .9rem; font-weight: 600; }
+.upload-label input { max-width: 100%; font-weight: 400; }
+.editor-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+.editor-image { min-width: 0; display: grid; gap: 5px; }
+.editor-image img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 7px; background: #f1f1ed; }
+.editor-image button { justify-self: start; border: 0; background: transparent; color: #a52f2f; padding: 5px 0; }
+.image-hint { margin: 0; color: #777; font-size: .84rem; }
+.editor-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.danger { margin-right: auto; border: 0; background: transparent; color: #a52f2f; padding: 10px; }
+@media (max-width: 600px) {
+  .app { padding: 0 14px 32px; }
+  .topbar { min-height: 66px; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 12px; }
+  .editor { padding: 18px; }
+}

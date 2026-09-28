@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.wrangler/
+.wrangler-config/
+.npm-cache/
+worker-configuration.d.ts
+.dev.vars
+.dev.vars.*
+.DS_Store
+Thumbs.db
