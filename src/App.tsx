@@ -74,6 +74,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [labelFilter, setLabelFilter] = useState("");
   const [availableLabels, setAvailableLabels] = useState<string[]>([]);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [notes, setNotes] = useState<Note[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -130,6 +131,18 @@ export default function App() {
       ? { title: note.title, body: note.body, url: note.url, pinned: note.pinned, archived: note.archived, color: note.color,
         checklist: note.checklist.map(({ text, checked }) => ({ text, checked })) }
       : { ...emptyNote, archived: view === "archived" });
+  }
+
+  function selectView(nextView: View) {
+    setView(nextView);
+    setLabelFilter("");
+    setMenuOpen(false);
+  }
+
+  function selectLabel(name: string) {
+    setView("active");
+    setLabelFilter(name);
+    setMenuOpen(false);
   }
 
   async function loadMore() {
@@ -389,27 +402,33 @@ export default function App() {
   return (
     <main className="app">
       <header className="topbar">
-        <h1>MyKeep</h1>
-        {view !== "trash" && <button className="primary" onClick={() => openEditor()}>＋ 新規メモ</button>}
-      </header>
-
-      <div className="browse-bar">
-        <nav className="tabs" aria-label="メモの表示">
-          <button className={view === "active" ? "selected" : ""} onClick={() => setView("active")}>メモ</button>
-          <button className={view === "archived" ? "selected" : ""} onClick={() => setView("archived")}>アーカイブ</button>
-          <button className={view === "trash" ? "selected" : ""} onClick={() => setView("trash")}>ゴミ箱</button>
-        </nav>
+        <div className="brand">
+          <button type="button" className="menu-toggle" aria-label="メニューを開く" aria-controls="sidebar" aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}>☰</button>
+          <h1>MyKeep</h1>
+        </div>
         <label className="search-field">検索
           <input type="search" value={search} maxLength={200} placeholder="タイトル・本文・URL" onChange={(event) => setSearch(event.target.value)} />
         </label>
-        <label className="label-filter">ラベル
-          <select value={labelFilter} onChange={(event) => setLabelFilter(event.target.value)}>
-            <option value="">すべて</option>
-            {availableLabels.map((name) => <option value={name} key={name}>{name}</option>)}
-          </select>
-        </label>
-      </div>
+        {view !== "trash" && <button className="primary" onClick={() => openEditor()}>＋ 新規メモ</button>}
+      </header>
 
+      {menuOpen && <button type="button" className="sidebar-scrim" aria-label="メニューを閉じる" onClick={() => setMenuOpen(false)} />}
+      <div className="app-layout">
+        <aside id="sidebar" className={`sidebar${menuOpen ? " open" : ""}`} aria-label="サイドバー">
+          <div className="sidebar-title">MyKeep</div>
+          <nav className="sidebar-nav" aria-label="メモの表示">
+            <button type="button" className={view === "active" && !labelFilter ? "selected" : ""} aria-current={view === "active" && !labelFilter ? "page" : undefined} onClick={() => selectView("active")}><span aria-hidden="true">💡</span>メモ</button>
+            <button type="button" className={view === "archived" ? "selected" : ""} aria-current={view === "archived" ? "page" : undefined} onClick={() => selectView("archived")}><span aria-hidden="true">📦</span>アーカイブ</button>
+            <button type="button" className={view === "trash" ? "selected" : ""} aria-current={view === "trash" ? "page" : undefined} onClick={() => selectView("trash")}><span aria-hidden="true">🗑</span>ゴミ箱</button>
+          </nav>
+          <div className="sidebar-labels">
+            <h2>ラベル</h2>
+            <nav className="sidebar-nav" aria-label="ラベル">
+              {availableLabels.map((name) => <button type="button" className={view === "active" && labelFilter === name ? "selected" : ""} aria-current={view === "active" && labelFilter === name ? "page" : undefined} onClick={() => selectLabel(name)} key={name}><span aria-hidden="true">🏷</span>{name}</button>)}
+            </nav>
+          </div>
+        </aside>
+        <div className="main-content">
       <details className="import-panel">
         <summary>Google Keep Import</summary>
         <div className="import-content">
@@ -460,6 +479,8 @@ export default function App() {
 
       {loading && <p className="status">読み込み中…</p>}
       {hasMore && !loading && <button className="more" onClick={loadMore}>続きを読み込む</button>}
+        </div>
+      </div>
 
       {draft && (
         <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !working) setDraft(null); }}>
