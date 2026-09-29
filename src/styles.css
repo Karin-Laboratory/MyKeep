@@ -40,8 +40,8 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 700; }
 .import-content label { display: grid; gap: 6px; }
 .import-content input { max-width: 100%; }
 .import-content p { margin: 0; line-height: 1.6; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(245px, 1fr)); gap: 16px; align-items: start; }
-.card { min-width: 0; border: 1px solid #dddcd5; border-radius: 12px; background: var(--note-bg, #fff); box-shadow: 0 2px 5px #00000008; overflow: hidden; }
+.grid { columns: 210px; column-gap: 16px; }
+.card { width: 100%; min-width: 0; margin-bottom: 16px; break-inside: avoid; border: 1px solid #dddcd5; border-radius: 12px; background: var(--note-bg, #fff); box-shadow: 0 2px 5px #00000008; overflow: hidden; }
 .card[data-color="red"], .editor[data-color="red"] { --note-bg: #ffe9e7; }
 .card[data-color="orange"], .editor[data-color="orange"] { --note-bg: #ffeddc; }
 .card[data-color="yellow"], .editor[data-color="yellow"] { --note-bg: #fff5cf; }
@@ -140,7 +140,8 @@ h2 { margin: 0; font-size: 1.15rem; }
   .sidebar.open { visibility: visible; pointer-events: auto; transform: translateX(0); }
   .sidebar-title { display: block; margin: 0 12px 24px; font-size: 1.35rem; font-weight: 700; }
   .sidebar-scrim { display: block; position: fixed; z-index: 20; inset: 0 0 0 min(280px, calc(100vw - 40px)); border: 0; background: #0006; }
-  .grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 12px; }
+  .grid { columns: 1; }
+  .card { margin-bottom: 12px; }
   .editor { padding: 18px; }
   .utility-modal { padding: 18px; }
 }
