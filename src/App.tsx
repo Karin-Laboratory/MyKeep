@@ -126,6 +126,11 @@ export default function App() {
   const [exportMessage, setExportMessage] = useState("");
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [labelManagerOpen, setLabelManagerOpen] = useState(false);
+  const [labelsToDelete, setLabelsToDelete] = useState<string[]>([]);
+  const [labelDeleteConfirm, setLabelDeleteConfirm] = useState(false);
+  const [deletingLabels, setDeletingLabels] = useState(false);
+  const [labelDeleteError, setLabelDeleteError] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [richLinkPreview, setRichLinkPreview] = useState(() => savedSetting(PREVIEW_SETTING, true));
@@ -325,6 +330,49 @@ export default function App() {
     setView("active");
     setLabelFilter(name);
     setMenuOpen(false);
+  }
+
+  function closeLabelManager() {
+    setLabelManagerOpen(false);
+    setLabelsToDelete([]);
+    setLabelDeleteConfirm(false);
+    setLabelDeleteError("");
+  }
+
+  function openLabelManager() {
+    setLabelsToDelete([]);
+    setLabelDeleteConfirm(false);
+    setLabelDeleteError("");
+    setLabelManagerOpen(true);
+    setMenuOpen(false);
+  }
+
+  function toggleLabelToDelete(name: string) {
+    const key = labelKey(name);
+    setLabelsToDelete((current) => current.includes(key)
+      ? current.filter((selected) => selected !== key)
+      : current.length < 50 ? [...current, key] : current);
+  }
+
+  async function deleteSelectedLabels() {
+    const names = availableLabels.filter((name) => labelsToDelete.includes(labelKey(name)));
+    if (!names.length || deletingLabels) return;
+    setDeletingLabels(true);
+    setLabelDeleteError("");
+    try {
+      await api<{ deleted: number }>("/api/labels", { method: "DELETE", body: JSON.stringify({ labels: names }) });
+      setAvailableLabels((current) => current.filter((name) => !labelsToDelete.includes(labelKey(name))));
+      if (labelsToDelete.includes(labelKey(labelFilter))) {
+        setLabelFilter("");
+        setView("active");
+      }
+      closeLabelManager();
+      setReload((value) => value + 1);
+    } catch (cause) {
+      setLabelDeleteError(cause instanceof Error ? cause.message : "ラベルを削除できませんでした。");
+    } finally {
+      setDeletingLabels(false);
+    }
   }
 
   function goHome() {
@@ -635,6 +683,7 @@ export default function App() {
 
   const labelOptions = [...availableLabels, ...selectedLabels].filter((name, index, all) =>
     all.findIndex((candidate) => labelKey(candidate) === labelKey(name)) === index);
+  const deleteLabelNames = availableLabels.filter((name) => labelsToDelete.includes(labelKey(name)));
   const pinnedNotes = notes.filter((note) => note.pinned);
   const otherNotes = notes.filter((note) => !note.pinned);
 
@@ -706,6 +755,7 @@ export default function App() {
             <h2>ラベル</h2>
             <nav className="sidebar-nav" aria-label="ラベル">
               {availableLabels.map((name) => <button type="button" className={view === "active" && labelFilter === name ? "selected" : ""} aria-current={view === "active" && labelFilter === name ? "page" : undefined} onClick={() => selectLabel(name)} key={name}><span aria-hidden="true">🏷</span>{name}</button>)}
+              <button type="button" onClick={openLabelManager}><span aria-hidden="true">⚙</span>ラベル整理</button>
             </nav>
           </div>
         </aside>
@@ -731,6 +781,32 @@ export default function App() {
           <div className="editor-heading"><h2>設定</h2><button type="button" className="close" aria-label="閉じる" onClick={() => setSettingsOpen(false)}>×</button></div>
           <label className="setting-row"><input type="checkbox" checked={richLinkPreview} onChange={(event) => setRichLinkPreview(event.target.checked)} />リッチリンクプレビュー</label>
           <label className="setting-row"><input type="checkbox" checked={darkMode} onChange={(event) => setDarkMode(event.target.checked)} />ダークモード</label>
+        </section>
+      </div>}
+
+      {labelManagerOpen && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !deletingLabels) closeLabelManager(); }}>
+        <section className="utility-modal" role="dialog" aria-modal="true" aria-label="ラベル整理">
+          <div className="editor-heading"><h2>ラベル整理</h2><button type="button" className="close" aria-label="閉じる" onClick={closeLabelManager} disabled={deletingLabels}>×</button></div>
+          {labelDeleteConfirm ? <>
+            <p>{deleteLabelNames.length <= 3
+              ? `「${deleteLabelNames.join("」「")}」を削除しますか？`
+              : `選択した${deleteLabelNames.length}件のラベルを削除しますか？`}</p>
+            <p>これらのラベルはメモからも外れます。メモ本体は削除されません。</p>
+          </> : <div className="label-manager-list">
+            {availableLabels.map((name) => <label key={labelKey(name)}>
+              <input type="checkbox" checked={labelsToDelete.includes(labelKey(name))}
+                disabled={deletingLabels || (labelsToDelete.length >= 50 && !labelsToDelete.includes(labelKey(name)))}
+                onChange={() => toggleLabelToDelete(name)} />{name}
+            </label>)}
+            {availableLabels.length === 0 && <p>ラベルはありません。</p>}
+          </div>}
+          {labelDeleteError && <p className="error" role="alert">{labelDeleteError}</p>}
+          <div className="label-manager-actions">
+            <button type="button" className="label-cancel-button" onClick={() => labelDeleteConfirm ? setLabelDeleteConfirm(false) : closeLabelManager()} disabled={deletingLabels}>キャンセル</button>
+            {labelDeleteConfirm
+              ? <button type="button" className="label-delete-button" onClick={() => { void deleteSelectedLabels(); }} disabled={deletingLabels || deleteLabelNames.length === 0}>削除</button>
+              : <button type="button" className="label-delete-button" onClick={() => { setLabelDeleteError(""); setLabelDeleteConfirm(true); }} disabled={deleteLabelNames.length === 0}>選択したラベルを削除</button>}
+          </div>
         </section>
       </div>}
 

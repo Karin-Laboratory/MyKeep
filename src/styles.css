@@ -80,6 +80,13 @@ button.card-content:hover { background: #ffffff70; }
 .overlay { position: fixed; inset: 0; z-index: 10; background: #0007; display: flex; align-items: center; justify-content: center; padding: 16px; }
 .utility-modal { width: min(100%, 460px); max-height: calc(100vh - 32px); overflow-y: auto; border-radius: 14px; background: white; padding: 22px; box-shadow: 0 18px 55px #0003; display: grid; gap: 16px; }
 .utility-modal p { margin: 0; line-height: 1.6; }
+.label-manager-list { display: grid; gap: 2px; max-height: 50vh; overflow-y: auto; }
+.label-manager-list label { display: flex; align-items: center; gap: 10px; padding: 7px 4px; overflow-wrap: anywhere; }
+.label-manager-list input { width: 18px; height: 18px; flex: 0 0 auto; }
+.label-manager-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+.label-manager-actions button { border-radius: 8px; padding: 9px 12px; }
+.label-cancel-button { border: 1px solid #cecec8; background: white; color: #242424; }
+.label-delete-button { border: 1px solid #a52f2f; background: #a52f2f; color: white; }
 .setting-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
 .setting-row input { width: 18px; height: 18px; }
 .editor { width: min(100%, 600px); max-height: calc(100vh - 32px); overflow-y: auto; border-radius: 14px; background: var(--note-bg, #fff); padding: 22px; box-shadow: 0 18px 55px #0003; display: grid; gap: 12px; }
@@ -170,6 +177,8 @@ h2 { margin: 0; font-size: 1.15rem; }
 :root[data-theme="dark"] .sidebar-nav button:hover { background: #303237; }
 :root[data-theme="dark"] .sidebar-nav button.selected { background: #5a4a20; color: #fff2ca; }
 :root[data-theme="dark"] .settings-dropdown, :root[data-theme="dark"] .utility-modal { background: #26282b; border-color: #4b4d50; }
+:root[data-theme="dark"] .label-cancel-button { background: #303237; border-color: #63666a; color: #eeeae0; }
+:root[data-theme="dark"] .label-delete-button { background: #963735; border-color: #c35b58; color: white; }
 :root[data-theme="dark"] .settings-dropdown button:hover { background: #373a3e; }
 :root[data-theme="dark"] .card, :root[data-theme="dark"] .editor { --note-bg: #2c2e31; border-color: #55565a; }
 :root[data-theme="dark"] .card[data-color="red"], :root[data-theme="dark"] .editor[data-color="red"] { --note-bg: #563433; }

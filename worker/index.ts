@@ -249,6 +249,28 @@ async function listLabels(env: Env): Promise<Response> {
   return json({ labels: (result.results ?? []).map((row) => row.name) });
 }
 
+async function deleteLabels(request: Request, env: Env): Promise<Response> {
+  const value = await readInput(request, 20_000);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return json({ error: "ラベルの指定が正しくありません。" }, 400);
+  const labels = (value as Record<string, unknown>).labels;
+  if (!Array.isArray(labels) || labels.length === 0 || labels.length > MAX_LABELS) {
+    return json({ error: "削除するラベルを1〜50件指定してください。" }, 400);
+  }
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const value of labels) {
+    if (typeof value !== "string") return json({ error: "ラベルの指定が正しくありません。" }, 400);
+    const name = value.trim().normalize("NFC");
+    const key = labelKey(name);
+    if (!name || name.length > 100 || seen.has(key)) return json({ error: "ラベルの指定が正しくありません。" }, 400);
+    keys.push(key);
+    seen.add(key);
+  }
+  const placeholders = keys.map(() => "?").join(",");
+  const result = await env.DB.prepare(`DELETE FROM labels WHERE name_key IN (${placeholders}) RETURNING name_key`).bind(...keys).all<{ name_key: string }>();
+  return json({ deleted: result.results.length });
+}
+
 async function exportCounts(env: Env): Promise<Response> {
   const counts = await env.DB.prepare(
     "SELECT (SELECT COUNT(*) FROM notes) AS notes, (SELECT COUNT(*) FROM attachments) AS attachments",
@@ -525,8 +547,9 @@ export default {
         if (request.method === "POST") return await createNote(request, env);
       }
 
-      if (url.pathname === "/api/labels" && request.method === "GET") {
-        return await listLabels(env);
+      if (url.pathname === "/api/labels") {
+        if (request.method === "GET") return await listLabels(env);
+        if (request.method === "DELETE") return await deleteLabels(request, env);
       }
 
       if (url.pathname === "/api/export/counts" && request.method === "GET") {
