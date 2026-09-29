@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { BlobWriter } from "@zip.js/zip.js";
 import { backupFileName, createBackup } from "./exportBackup";
 import type { BackupProgress, BackupResult } from "./exportBackup";
 import { readKeepZip } from "./keepImport";
 import type { KeepZipResult } from "./keepImport";
+import { getLinkPreview } from "./linkPreview";
+import type { LinkPreview } from "./linkPreview";
 import { NOTE_COLORS } from "./types";
 import type { Attachment, ChecklistInput, Note, NoteColor, NoteInput } from "./types";
 
@@ -20,6 +22,23 @@ const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "imag
 const COLOR_LABELS: Record<NoteColor, string> = {
   default: "なし", red: "赤", orange: "オレンジ", yellow: "黄", green: "緑", blue: "青", purple: "紫",
 };
+const PREVIEW_SETTING = "mykeep.richLinkPreview";
+const DARK_SETTING = "mykeep.darkMode";
+
+function savedSetting(key: string, fallback: boolean): boolean {
+  try {
+    const value = window.localStorage.getItem(key);
+    return value === null ? fallback : value === "true";
+  } catch {
+    return fallback;
+  }
+}
+
+function firstPageChanged(current: Note[], next: NoteList): boolean {
+  const first = current.slice(0, 50);
+  return first.length !== next.notes.length
+    || first.some((note, index) => note.id !== next.notes[index].id || note.updated_at !== next.notes[index].updated_at);
+}
 
 function listPath(view: View, search: string, label: string, offset: number): string {
   const params = new URLSearchParams({ view, offset: String(offset) });
@@ -92,24 +111,65 @@ export default function App() {
   const [exportProgress, setExportProgress] = useState<BackupProgress | null>(null);
   const [exportResult, setExportResult] = useState<BackupResult | null>(null);
   const [exportMessage, setExportMessage] = useState("");
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [richLinkPreview, setRichLinkPreview] = useState(() => savedSetting(PREVIEW_SETTING, true));
+  const [darkMode, setDarkMode] = useState(() => savedSetting(DARK_SETTING, false));
+  const [previews, setPreviews] = useState<Record<string, LinkPreview | null>>({});
+  const settingsMenuRef = useRef<HTMLDivElement>(null);
+  const notesRef = useRef(notes);
+  const lastListPathRef = useRef("");
+  const refreshingRef = useRef(false);
+
+  useEffect(() => { notesRef.current = notes; }, [notes]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = darkMode ? "dark" : "light";
+    try {
+      window.localStorage.setItem(DARK_SETTING, String(darkMode));
+      window.localStorage.setItem(PREVIEW_SETTING, String(richLinkPreview));
+    } catch { /* 保存できない環境でも画面内の設定は使える。 */ }
+  }, [darkMode, richLinkPreview]);
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true);
-    setNotes([]);
-    setHasMore(false);
+    const path = listPath(view, search, labelFilter, 0);
+    const changedFilter = path !== lastListPathRef.current;
+    lastListPathRef.current = path;
+    const pages = changedFilter ? 1 : Math.max(1, Math.ceil(notesRef.current.length / 50));
+    refreshingRef.current = true;
+    if (changedFilter) {
+      setLoading(true);
+      setNotes([]);
+      setHasMore(false);
+    }
     setError("");
-    api<NoteList>(listPath(view, search, labelFilter, 0), { signal: controller.signal })
-      .then((data) => {
-        setNotes(data.notes);
-        setHasMore(data.hasMore);
-      })
-      .catch((cause: unknown) => {
+    async function refresh() {
+      try {
+        const collected: Note[] = [];
+        let more = false;
+        for (let page = 0; page < pages; page++) {
+          const data = await api<NoteList>(listPath(view, search, labelFilter, page * 50), { signal: controller.signal });
+          collected.push(...data.notes);
+          more = data.hasMore;
+          if (!more) break;
+        }
+        if (!controller.signal.aborted) {
+          setNotes(collected);
+          setHasMore(more);
+        }
+      } catch (cause) {
         if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "読み込みに失敗しました。");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
+      } finally {
+        if (!controller.signal.aborted) {
+          refreshingRef.current = false;
+          setLoading(false);
+        }
+      }
+    }
+    void refresh();
     return () => controller.abort();
   }, [view, search, labelFilter, reload]);
 
@@ -121,6 +181,58 @@ export default function App() {
       })
       .catch(() => setAvailableLabels([]));
   }, [reload]);
+
+  useEffect(() => {
+    let active = true;
+    let checking = false;
+    async function checkForNewNotes() {
+      if (document.visibilityState !== "visible" || refreshingRef.current || checking) return;
+      checking = true;
+      try {
+        const data = await api<NoteList>(listPath(view, search, labelFilter, 0));
+        if (active && firstPageChanged(notesRef.current, data)) setReload((value) => value + 1);
+      } catch { /* 自動確認の失敗は表示中の一覧に影響させない。 */ }
+      finally { checking = false; }
+    }
+    const interval = window.setInterval(() => { void checkForNewNotes(); }, 10_000);
+    const onFocus = () => { void checkForNewNotes(); };
+    const onVisibility = () => { if (document.visibilityState === "visible") void checkForNewNotes(); };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [view, search, labelFilter]);
+
+  useEffect(() => {
+    if (!richLinkPreview) return;
+    let active = true;
+    for (const url of new Set(notes.map((note) => note.url).filter(Boolean))) {
+      void getLinkPreview(url).then((preview) => {
+        if (active) setPreviews((current) => current[url] === preview ? current : { ...current, [url]: preview });
+      });
+    }
+    return () => { active = false; };
+  }, [notes, richLinkPreview]);
+
+  useEffect(() => {
+    if (!settingsMenuOpen) return;
+    const closeOutside = (event: MouseEvent) => {
+      if (!settingsMenuRef.current?.contains(event.target as Node)) setSettingsMenuOpen(false);
+    };
+    const closeEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSettingsMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeOutside);
+    document.addEventListener("keydown", closeEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOutside);
+      document.removeEventListener("keydown", closeEscape);
+    };
+  }, [settingsMenuOpen]);
 
   function openEditor(note?: Note) {
     setError("");
@@ -145,7 +257,21 @@ export default function App() {
     setMenuOpen(false);
   }
 
+  function goHome() {
+    setView("active");
+    setLabelFilter("");
+    setSearch("");
+    setMenuOpen(false);
+    setSettingsMenuOpen(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function refreshCurrent() {
+    setReload((value) => value + 1);
+  }
+
   async function loadMore() {
+    if (refreshingRef.current || loading) return;
     setLoading(true);
     setError("");
     try {
@@ -404,12 +530,23 @@ export default function App() {
       <header className="topbar">
         <div className="brand">
           <button type="button" className="menu-toggle" aria-label="メニューを開く" aria-controls="sidebar" aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}>☰</button>
-          <h1>MyKeep</h1>
+          <h1><button type="button" className="home-button" onClick={goHome} title="メモへ戻る">MyKeep</button></h1>
         </div>
         <label className="search-field">検索
           <input type="search" value={search} maxLength={200} placeholder="タイトル・本文・URL" onChange={(event) => setSearch(event.target.value)} />
         </label>
-        {view !== "trash" && <button className="primary" onClick={() => openEditor()}>＋ 新規メモ</button>}
+        <div className="header-actions">
+          <button type="button" className="icon-button" aria-label="更新" title="更新" onClick={refreshCurrent}>↻</button>
+          <div className="settings-menu-wrap" ref={settingsMenuRef}>
+            <button type="button" className="icon-button" aria-label="設定メニュー" title="設定" aria-expanded={settingsMenuOpen} aria-haspopup="menu" onClick={() => setSettingsMenuOpen((open) => !open)}>⚙</button>
+            {settingsMenuOpen && <div className="settings-dropdown" role="menu">
+              <button type="button" role="menuitem" onClick={() => { setSettingsMenuOpen(false); setSettingsOpen(true); }}>設定</button>
+              <button type="button" role="menuitem" onClick={() => { setSettingsMenuOpen(false); setImportOpen(true); }}>Keep Import</button>
+              <button type="button" role="menuitem" onClick={() => { setSettingsMenuOpen(false); setExportOpen(true); void exportAll(); }} disabled={exporting || importing}>Export</button>
+            </div>}
+          </div>
+          {view !== "trash" && <button type="button" className="primary new-note" aria-label="新規メモ" onClick={() => openEditor()}><span className="new-note-icon">＋</span><span className="new-note-text"> 新規メモ</span></button>}
+        </div>
       </header>
 
       {menuOpen && <button type="button" className="sidebar-scrim" aria-label="メニューを閉じる" onClick={() => setMenuOpen(false)} />}
@@ -429,41 +566,28 @@ export default function App() {
           </div>
         </aside>
         <div className="main-content">
-      <details className="import-panel">
-        <summary>Google Keep Import</summary>
-        <div className="import-content">
-          <label>Takeout ZIPを選択
-            <input type="file" accept=".zip,application/zip" onChange={importZip} disabled={importing || exporting} />
-          </label>
-          {importMessage && <p role="status">{importMessage}</p>}
-          {importProgress && <p>メモ: {importProgress.notes.done} / {importProgress.notes.total}<br />
-            成功 {importProgress.notes.success}　失敗 {importProgress.notes.failed}　スキップ {importProgress.notes.skipped}<br />
-            画像・添付: {importProgress.attachments.done} / {importProgress.attachments.total}<br />
-            成功 {importProgress.attachments.success}　失敗 {importProgress.attachments.failed}　スキップ {importProgress.attachments.skipped}</p>}
-        </div>
-      </details>
-
-      <section className="export-panel" aria-label="バックアップ">
-        <button onClick={exportAll} disabled={exporting || importing}>全データをエクスポート</button>
-        {exportProgress && exportProgress.stage !== "done" && <p role="status">
-          メモ取得: {exportProgress.notesDone} / {exportProgress.notesTotal}<br />
-          添付取得: {exportProgress.attachmentsDone} / {exportProgress.attachmentsTotal}<br />
-          {exportProgress.stage === "zip" ? "ZIP作成中..." : exportProgress.stage === "notes" ? "メモ取得中..." : "添付取得中..."}
-        </p>}
-        {exportMessage && <p role="status">{exportMessage}</p>}
-        {exportResult && <p>メモ {exportResult.notes}件　添付成功 {exportResult.attachmentsSucceeded}件　添付失敗 {exportResult.attachmentsFailed}件</p>}
-      </section>
-
       {error && !draft && <p className="error" role="alert">{error}</p>}
       {!loading && notes.length === 0 && <p className="empty">{search.trim() || labelFilter ? "該当するメモはありません。" : view === "active" ? "メモはまだありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}
 
       <section className="grid" aria-label={view === "active" ? "メモ一覧" : view === "archived" ? "アーカイブ一覧" : "ゴミ箱一覧"}>
-        {notes.map((note) => (
+        {notes.map((note) => {
+          const preview = richLinkPreview ? previews[note.url] : null;
+          return (
           <article className="card" data-color={note.color} key={note.id}>
             {view === "trash"
               ? <div className="card-content">{notePreview(note)}</div>
               : <button className="card-content" onClick={() => openEditor(note)} aria-label={`${note.title || "無題のメモ"}を編集`}>{notePreview(note)}</button>}
-            {note.url && <a className="note-link" href={note.url} target="_blank" rel="noopener noreferrer">{note.url}</a>}
+            {note.url && (preview
+              ? <a className="link-preview" href={note.url} target="_blank" rel="noopener noreferrer">
+                  {preview.image && !note.attachments.some((attachment) => IMAGE_TYPES.includes(attachment.mime_type))
+                    && <img src={preview.image} alt="" loading="lazy" referrerPolicy="no-referrer" />}
+                  <span className="link-preview-details">
+                    <strong>{preview.title}</strong>
+                    <small>{preview.hostname}</small>
+                    {preview.description && <span>{preview.description}</span>}
+                  </span>
+                </a>
+              : <a className="note-link" href={note.url} target="_blank" rel="noopener noreferrer">{note.url}</a>)}
             <div className="card-actions">
               {view === "trash" ? <>
                 <button disabled={working} onClick={() => restore(note)}>復元</button>
@@ -474,13 +598,50 @@ export default function App() {
               </>}
             </div>
           </article>
-        ))}
+        );})}
       </section>
 
       {loading && <p className="status">読み込み中…</p>}
       {hasMore && !loading && <button className="more" onClick={loadMore}>続きを読み込む</button>}
         </div>
       </div>
+
+      {settingsOpen && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
+        <section className="utility-modal" role="dialog" aria-modal="true" aria-label="設定">
+          <div className="editor-heading"><h2>設定</h2><button type="button" className="close" aria-label="閉じる" onClick={() => setSettingsOpen(false)}>×</button></div>
+          <label className="setting-row"><input type="checkbox" checked={richLinkPreview} onChange={(event) => setRichLinkPreview(event.target.checked)} />リッチリンクプレビュー</label>
+          <label className="setting-row"><input type="checkbox" checked={darkMode} onChange={(event) => setDarkMode(event.target.checked)} />ダークモード</label>
+        </section>
+      </div>}
+
+      {importOpen && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !importing) setImportOpen(false); }}>
+        <section className="utility-modal" role="dialog" aria-modal="true" aria-label="Google Keep Import">
+          <div className="editor-heading"><h2>Google Keep Import</h2><button type="button" className="close" aria-label="閉じる" onClick={() => setImportOpen(false)} disabled={importing}>×</button></div>
+          <div className="import-content">
+            <label>Takeout ZIPを選択
+              <input type="file" accept=".zip,application/zip" onChange={importZip} disabled={importing || exporting} />
+            </label>
+            {importMessage && <p role="status">{importMessage}</p>}
+            {importProgress && <p>メモ: {importProgress.notes.done} / {importProgress.notes.total}<br />
+              成功 {importProgress.notes.success}　失敗 {importProgress.notes.failed}　スキップ {importProgress.notes.skipped}<br />
+              画像・添付: {importProgress.attachments.done} / {importProgress.attachments.total}<br />
+              成功 {importProgress.attachments.success}　失敗 {importProgress.attachments.failed}　スキップ {importProgress.attachments.skipped}</p>}
+          </div>
+        </section>
+      </div>}
+
+      {exportOpen && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !exporting) setExportOpen(false); }}>
+        <section className="utility-modal" role="dialog" aria-modal="true" aria-label="Export">
+          <div className="editor-heading"><h2>Export</h2><button type="button" className="close" aria-label="閉じる" onClick={() => setExportOpen(false)} disabled={exporting}>×</button></div>
+          {exportProgress && exportProgress.stage !== "done" && <p role="status">
+            メモ取得: {exportProgress.notesDone} / {exportProgress.notesTotal}<br />
+            添付取得: {exportProgress.attachmentsDone} / {exportProgress.attachmentsTotal}<br />
+            {exportProgress.stage === "zip" ? "ZIP作成中..." : exportProgress.stage === "notes" ? "メモ取得中..." : "添付取得中..."}
+          </p>}
+          {exportMessage && <p role="status">{exportMessage}</p>}
+          {exportResult && <p>メモ {exportResult.notes}件　添付成功 {exportResult.attachmentsSucceeded}件　添付失敗 {exportResult.attachmentsFailed}件</p>}
+        </section>
+      </div>}
 
       {draft && (
         <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !working) setDraft(null); }}>

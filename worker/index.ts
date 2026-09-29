@@ -1,4 +1,5 @@
 import { NOTE_COLORS } from "../src/types";
+import { linkPreview } from "./linkPreview";
 import type { Attachment, ChecklistItem, Note, NoteColor, NoteInput } from "../src/types";
 
 interface NoteRow {
@@ -508,6 +509,10 @@ export default {
     try {
       if (url.pathname === "/api/capture" && request.method === "POST") {
         return await captureNote(request, env);
+      }
+
+      if (url.pathname === "/api/link-preview" && request.method === "GET") {
+        return await linkPreview(request);
       }
 
       if (request.method !== "GET") {
