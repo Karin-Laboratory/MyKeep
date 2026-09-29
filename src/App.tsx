@@ -635,6 +635,39 @@ export default function App() {
 
   const labelOptions = [...availableLabels, ...selectedLabels].filter((name, index, all) =>
     all.findIndex((candidate) => labelKey(candidate) === labelKey(name)) === index);
+  const pinnedNotes = notes.filter((note) => note.pinned);
+  const otherNotes = notes.filter((note) => !note.pinned);
+
+  function renderNoteCard(note: Note) {
+    const preview = richLinkPreview ? previews[note.url] : null;
+    return (
+      <article className="card" data-color={note.color} key={note.id}>
+        {view === "trash"
+          ? <div className="card-content">{notePreview(note)}</div>
+          : <button className="card-content" onClick={() => openEditor(note)} aria-label={`${note.title || "無題のメモ"}を編集`}>{notePreview(note)}</button>}
+        {note.url && (preview
+          ? <a className="link-preview" href={note.url} target="_blank" rel="noopener noreferrer">
+              {preview.image && !note.attachments.some((attachment) => IMAGE_TYPES.includes(attachment.mime_type))
+                && <img src={preview.image} alt="" loading="lazy" referrerPolicy="no-referrer" />}
+              <span className="link-preview-details">
+                <strong>{preview.title}</strong>
+                <small>{preview.hostname}</small>
+                {preview.description && <span>{preview.description}</span>}
+              </span>
+            </a>
+          : <a className="note-link" href={note.url} target="_blank" rel="noopener noreferrer">{note.url}</a>)}
+        <div className="card-actions">
+          {view === "trash" ? <>
+            <button disabled={working} onClick={() => restore(note)}>復元</button>
+            <button className="danger" disabled={working} onClick={() => permanentlyRemove(note)}>完全削除</button>
+          </> : <>
+            <button disabled={working} onClick={() => updateFlag(note, "pinned")}>{note.pinned ? "ピン解除" : "ピン留め"}</button>
+            <button disabled={working} onClick={() => updateFlag(note, "archived")}>{note.archived ? "戻す" : "アーカイブ"}</button>
+          </>}
+        </div>
+      </article>
+    );
+  }
 
   return (
     <main className="app">
@@ -680,37 +713,13 @@ export default function App() {
       {error && !draft && <p className="error" role="alert">{error}</p>}
       {!loading && notes.length === 0 && <p className="empty">{search.trim() || labelFilter ? "該当するメモはありません。" : view === "active" ? "メモはまだありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}
 
-      <section className="grid" aria-label={view === "active" ? "メモ一覧" : view === "archived" ? "アーカイブ一覧" : "ゴミ箱一覧"}>
-        {notes.map((note) => {
-          const preview = richLinkPreview ? previews[note.url] : null;
-          return (
-          <article className="card" data-color={note.color} key={note.id}>
-            {view === "trash"
-              ? <div className="card-content">{notePreview(note)}</div>
-              : <button className="card-content" onClick={() => openEditor(note)} aria-label={`${note.title || "無題のメモ"}を編集`}>{notePreview(note)}</button>}
-            {note.url && (preview
-              ? <a className="link-preview" href={note.url} target="_blank" rel="noopener noreferrer">
-                  {preview.image && !note.attachments.some((attachment) => IMAGE_TYPES.includes(attachment.mime_type))
-                    && <img src={preview.image} alt="" loading="lazy" referrerPolicy="no-referrer" />}
-                  <span className="link-preview-details">
-                    <strong>{preview.title}</strong>
-                    <small>{preview.hostname}</small>
-                    {preview.description && <span>{preview.description}</span>}
-                  </span>
-                </a>
-              : <a className="note-link" href={note.url} target="_blank" rel="noopener noreferrer">{note.url}</a>)}
-            <div className="card-actions">
-              {view === "trash" ? <>
-                <button disabled={working} onClick={() => restore(note)}>復元</button>
-                <button className="danger" disabled={working} onClick={() => permanentlyRemove(note)}>完全削除</button>
-              </> : <>
-                <button disabled={working} onClick={() => updateFlag(note, "pinned")}>{note.pinned ? "ピン解除" : "ピン留め"}</button>
-                <button disabled={working} onClick={() => updateFlag(note, "archived")}>{note.archived ? "戻す" : "アーカイブ"}</button>
-              </>}
-            </div>
-          </article>
-        );})}
-      </section>
+      {view === "trash" ? (
+        <section className="grid" aria-label="ゴミ箱一覧">{notes.map(renderNoteCard)}</section>
+      ) : <>
+        {pinnedNotes.length > 0 && <section className="grid" aria-label="ピン留めメモ">{pinnedNotes.map(renderNoteCard)}</section>}
+        {pinnedNotes.length > 0 && otherNotes.length > 0 && <div className="note-section-separator" aria-hidden="true" />}
+        {otherNotes.length > 0 && <section className="grid" aria-label={view === "active" ? "メモ一覧" : "アーカイブ一覧"}>{otherNotes.map(renderNoteCard)}</section>}
+      </>}
 
       {loading && <p className="status">読み込み中…</p>}
       {hasMore && !loading && <button className="more" onClick={loadMore}>続きを読み込む</button>}
