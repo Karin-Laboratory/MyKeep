@@ -5,7 +5,7 @@ import { backupFileName, createBackup } from "./exportBackup";
 import type { BackupProgress, BackupResult } from "./exportBackup";
 import { readKeepZip } from "./keepImport";
 import type { KeepZipResult } from "./keepImport";
-import { getLinkPreview } from "./linkPreview";
+import { displayLinkTitle, getLinkPreview } from "./linkPreview";
 import type { LinkPreview } from "./linkPreview";
 import { NOTE_COLORS } from "./types";
 import type { Attachment, ChecklistInput, Note, NoteColor, NoteInput } from "./types";
@@ -692,19 +692,23 @@ export default function App() {
 
   function renderNoteCard(note: Note) {
     const preview = richLinkPreview ? previews[note.url] : null;
+    const instagramTitle = preview?.title.trim().toLowerCase().replace(/^www\./, "");
+    const showUrl = preview && /(^|\.)instagram\.com$/i.test(preview.hostname)
+      && !preview.image && !preview.description && ["", "instagram", "instagram.com"].includes(instagramTitle ?? "");
+    const visiblePreview = showUrl ? null : preview;
     return (
       <article className="card" data-color={note.color} key={note.id}>
         {view === "trash"
           ? <div className="card-content">{notePreview(note)}</div>
           : <button className="card-content" onClick={() => openEditor(note)} aria-label={`${note.title || "無題のメモ"}を編集`}>{notePreview(note)}</button>}
-        {note.url && (preview
+        {note.url && (visiblePreview
           ? <a className="link-preview" href={note.url} target="_blank" rel="noopener noreferrer">
-              {preview.image && !note.attachments.some((attachment) => IMAGE_TYPES.includes(attachment.mime_type))
-                && <img src={preview.image} alt="" loading="lazy" referrerPolicy="no-referrer" />}
+              {visiblePreview.image && !note.attachments.some((attachment) => IMAGE_TYPES.includes(attachment.mime_type))
+                && <img src={visiblePreview.image} alt="" loading="lazy" referrerPolicy="no-referrer" />}
               <span className="link-preview-details">
-                <strong>{preview.title}</strong>
-                <small>{preview.hostname}</small>
-                {preview.description && <span>{preview.description}</span>}
+                <strong>{displayLinkTitle(visiblePreview, note.title)}</strong>
+                <small>{visiblePreview.hostname}</small>
+                {visiblePreview.description && <span>{visiblePreview.description}</span>}
               </span>
             </a>
           : <a className="note-link" href={note.url} target="_blank" rel="noopener noreferrer">{note.url}</a>)}

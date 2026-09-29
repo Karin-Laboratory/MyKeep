@@ -33,32 +33,98 @@ function decodeEntities(value: string): string {
   });
 }
 
+function tagAttributes(tag: string): Map<string, string> {
+  const attrs = new Map<string, string>();
+  for (const match of tag.matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) {
+    attrs.set(match[1].toLowerCase(), decodeEntities(match[2] ?? match[3] ?? match[4] ?? ""));
+  }
+  return attrs;
+}
+
 function metadata(html: string): Map<string, string> {
   const result = new Map<string, string>();
   for (const tag of html.match(/<meta\b[^>]*>/gi) ?? []) {
-    const attrs = new Map<string, string>();
-    for (const match of tag.matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) {
-      attrs.set(match[1].toLowerCase(), decodeEntities(match[2] ?? match[3] ?? match[4] ?? ""));
-    }
+    const attrs = tagAttributes(tag);
     const key = (attrs.get("property") ?? attrs.get("name") ?? "").toLowerCase();
     if (key && !result.has(key)) result.set(key, attrs.get("content") ?? "");
   }
   return result;
 }
 
-async function readHead(response: Response): Promise<string> {
+function videoSite(hostname: string): "instagram.com" | "dailymotion.com" | null {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  if (host === "instagram.com" || host.endsWith(".instagram.com")) return "instagram.com";
+  if (host === "dailymotion.com" || host.endsWith(".dailymotion.com")) return "dailymotion.com";
+  return null;
+}
+
+function firstString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(firstString).find(Boolean) ?? "";
+  if (value && typeof value === "object" && "url" in value) return firstString(value.url);
+  return "";
+}
+
+function videoJsonLd(html: string): { title: string; description: string; image: string } {
+  for (const script of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
+    if (tagAttributes(script[1]).get("type")?.toLowerCase() !== "application/ld+json") continue;
+    try {
+      const data: unknown = JSON.parse(script[2]);
+      const roots = Array.isArray(data) ? data : [data];
+      for (const root of roots) {
+        if (!root || typeof root !== "object") continue;
+        const graph = "@graph" in root && Array.isArray(root["@graph"]) ? root["@graph"] : [];
+        for (const entry of [root, ...graph]) {
+          if (!entry || typeof entry !== "object" || !("@type" in entry)) continue;
+          const types = Array.isArray(entry["@type"]) ? entry["@type"] : [entry["@type"]];
+          if (!types.includes("VideoObject")) continue;
+          return {
+            title: "name" in entry ? firstString(entry.name) : "",
+            description: "description" in entry ? firstString(entry.description) : "",
+            image: "thumbnailUrl" in entry ? firstString(entry.thumbnailUrl) : "image" in entry ? firstString(entry.image) : "",
+          };
+        }
+      }
+    } catch { /* 壊れたJSON-LDは通常メタデータで続行する。 */ }
+  }
+  return { title: "", description: "", image: "" };
+}
+
+function oEmbedLink(html: string, pageUrl: URL): URL | null {
+  const site = videoSite(pageUrl.hostname);
+  if (!site) return null;
+  for (const tag of html.match(/<link\b[^>]*>/gi) ?? []) {
+    const attrs = tagAttributes(tag);
+    if (!attrs.get("rel")?.toLowerCase().split(/\s+/).includes("alternate")
+      || attrs.get("type")?.toLowerCase() !== "application/json+oembed" || !attrs.get("href")) continue;
+    try {
+      const endpoint = publicWebUrl(new URL(attrs.get("href")!, pageUrl).toString());
+      if (endpoint && videoSite(endpoint.hostname) === site) return endpoint;
+    } catch { /* 壊れたURLは無視する。 */ }
+  }
+  return null;
+}
+
+function genericVideoTitle(title: string, pageUrl: URL): boolean {
+  const site = videoSite(pageUrl.hostname);
+  const normalized = title.trim().toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
+  return !normalized || normalized === pageUrl.hostname.toLowerCase().replace(/^www\./, "")
+    || (site !== null && (normalized === site || normalized === site.split(".")[0]));
+}
+
+async function readText(response: Response, limit: number, stopAtHead: boolean): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) return "";
   const decoder = new TextDecoder();
   let html = "";
   let bytes = 0;
   try {
-    while (bytes < MAX_HTML_BYTES) {
+    while (bytes < limit) {
       const { done, value } = await reader.read();
       if (done) break;
       bytes += value.byteLength;
-      html += decoder.decode(value.slice(0, Math.max(0, MAX_HTML_BYTES - (bytes - value.byteLength))), { stream: true });
-      if (/<\/head\s*>/i.test(html)) break;
+      html += decoder.decode(value.slice(0, Math.max(0, limit - (bytes - value.byteLength))), { stream: true });
+      if (stopAtHead && /<\/head\s*>/i.test(html)) break;
     }
   } finally {
     await reader.cancel().catch(() => undefined);
@@ -66,11 +132,11 @@ async function readHead(response: Response): Promise<string> {
   return html;
 }
 
-async function fetchPublicPage(target: URL, signal: AbortSignal): Promise<{ response: Response; url: URL }> {
+async function fetchPublicPage(target: URL, signal: AbortSignal, headers = HTML_HEADERS): Promise<{ response: Response; url: URL }> {
   let current = target;
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
     // Check each hop before fetching so a public URL cannot redirect to an internal host.
-    const response = await fetch(current.toString(), { redirect: "manual", headers: HTML_HEADERS, signal });
+    const response = await fetch(current.toString(), { redirect: "manual", headers, signal });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("Location");
       await response.body?.cancel().catch(() => undefined);
@@ -88,6 +154,25 @@ async function fetchPublicPage(target: URL, signal: AbortSignal): Promise<{ resp
     return { response, url: finalUrl };
   }
   throw new Error("Too many redirects");
+}
+
+async function discoveredOEmbed(html: string, pageUrl: URL, signal: AbortSignal): Promise<{ title: string; image: string }> {
+  const endpoint = oEmbedLink(html, pageUrl);
+  if (!endpoint) return { title: "", image: "" };
+  try {
+    const { response } = await fetchPublicPage(endpoint, signal, { ...HTML_HEADERS, Accept: "application/json" });
+    if (!response.ok || !/^application\/(?:json|json\+oembed)\b/i.test(response.headers.get("Content-Type") ?? "")) {
+      return { title: "", image: "" };
+    }
+    const data: unknown = JSON.parse(await readText(response, 32 * 1024, false));
+    if (!data || typeof data !== "object") return { title: "", image: "" };
+    const title = "title" in data ? firstString(data.title) : "";
+    const thumbnail = "thumbnail_url" in data ? firstString(data.thumbnail_url) : "";
+    const image = thumbnail ? publicWebUrl(new URL(thumbnail, endpoint).toString())?.toString() ?? "" : "";
+    return { title, image };
+  } catch {
+    return { title: "", image: "" };
+  }
 }
 
 function youtubeVideoId(url: URL): string | null {
@@ -124,6 +209,14 @@ async function youtubePreview(videoId: string, signal: AbortSignal): Promise<Res
   }, { headers: { "Cache-Control": "private, max-age=3600" } });
 }
 
+function youtubeFallback(videoId: string): Response {
+  return Response.json({
+    title: "", description: "",
+    image: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    hostname: "www.youtube.com",
+  }, { headers: { "Cache-Control": "private, max-age=3600" } });
+}
+
 export async function linkPreview(request: Request): Promise<Response> {
   const target = publicWebUrl(new URL(request.url).searchParams.get("url") ?? "");
   if (!target) return Response.json({ error: "URLが正しくありません。" }, { status: 400 });
@@ -138,23 +231,38 @@ export async function linkPreview(request: Request): Promise<Response> {
   try {
     const { response, url } = await fetchPublicPage(target, signal);
     if (!response.ok || !/^(text\/html|application\/xhtml\+xml)\b/i.test(response.headers.get("Content-Type") ?? "")) {
-      return Response.json({ error: "プレビューを取得できません。" }, { status: 502 });
+      return videoId ? youtubeFallback(videoId) : Response.json({ error: "プレビューを取得できません。" }, { status: 502 });
     }
-    const html = await readHead(response);
+    const html = await readText(response, MAX_HTML_BYTES, !videoSite(url.hostname));
     const meta = metadata(html);
     const titleTag = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/i.exec(html);
-    const title = (meta.get("og:title") || meta.get("twitter:title") || (titleTag ? decodeEntities(titleTag[1]) : "") || url.hostname).trim().slice(0, 300);
-    const description = (meta.get("og:description") || meta.get("twitter:description") || meta.get("description") || "").trim().slice(0, 500);
-    const imageSource = meta.get("og:image") || meta.get("og:image:url") || meta.get("twitter:image") || meta.get("twitter:image:src") || "";
+    let foundTitle = (meta.get("og:title") || meta.get("twitter:title") || (titleTag ? decodeEntities(titleTag[1]) : "")).trim();
+    let description = (meta.get("og:description") || meta.get("twitter:description") || meta.get("description") || "").trim();
+    let imageSource = meta.get("og:image") || meta.get("og:image:url") || meta.get("twitter:image") || meta.get("twitter:image:src") || "";
+    if (videoSite(url.hostname)) {
+      const video = videoJsonLd(html);
+      if (genericVideoTitle(foundTitle, url) && video.title) foundTitle = video.title;
+      description ||= video.description;
+      imageSource ||= video.image;
+      if (genericVideoTitle(foundTitle, url) || !imageSource) {
+        const embed = await discoveredOEmbed(html, url, signal);
+        if (genericVideoTitle(foundTitle, url) && embed.title) foundTitle = embed.title;
+        imageSource ||= embed.image;
+      }
+    }
+    foundTitle = foundTitle.slice(0, 300);
+    const title = videoId && (!foundTitle || foundTitle.toLowerCase() === url.hostname.toLowerCase())
+      ? "" : foundTitle || url.hostname;
+    description = description.slice(0, 500);
     let image = "";
     if (imageSource) {
       try { image = publicWebUrl(new URL(imageSource, url).toString())?.toString() ?? ""; }
       catch { /* 壊れた画像URLでもタイトルのプレビューを表示する。 */ }
     }
-    return Response.json({ title, description, image, hostname: url.hostname }, {
+    return Response.json({ title, description, image: image || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : ""), hostname: url.hostname }, {
       headers: { "Cache-Control": "private, max-age=3600" },
     });
   } catch {
-    return Response.json({ error: "プレビューを取得できません。" }, { status: 502 });
+    return videoId ? youtubeFallback(videoId) : Response.json({ error: "プレビューを取得できません。" }, { status: 502 });
   }
 }

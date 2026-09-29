@@ -51,9 +51,9 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 700; }
 .card[data-color="purple"], .editor[data-color="purple"] { --note-bg: #efe7fb; }
 .card-content { display: flex; width: 100%; flex-direction: column; gap: 8px; text-align: left; border: 0; background: transparent; color: inherit; padding: 18px 18px 8px; min-height: 74px; }
 button.card-content:hover { background: #ffffff70; }
-.card-content strong { font-size: 1rem; overflow-wrap: anywhere; }
+.card-content > strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; font-size: 1rem; overflow-wrap: anywhere; }
 .pin-label { font-size: .76rem; color: #6a603d; }
-.body-preview { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; max-height: 12em; overflow: hidden; }
+.body-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; line-clamp: 5; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
 .checklist-preview { display: grid; gap: 3px; max-height: 12em; overflow: hidden; line-height: 1.4; }
 .checklist-preview span { overflow-wrap: anywhere; }
 .checklist-preview .checked { color: #777; text-decoration: line-through; }
@@ -67,9 +67,9 @@ button.card-content:hover { background: #ffffff70; }
 .link-preview:hover { border-color: #b1a35e; }
 .link-preview img { display: block; width: 100%; max-height: 160px; object-fit: cover; background: #f1f1ed; }
 .link-preview-details { display: grid; gap: 4px; padding: 10px; overflow-wrap: anywhere; }
-.link-preview-details strong { font-size: .9rem; }
+.link-preview-details strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; font-size: .9rem; }
 .link-preview-details small { color: #666; }
-.link-preview-details > span { color: #555; font-size: .8rem; line-height: 1.4; max-height: 3em; overflow: hidden; }
+.link-preview-details > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; color: #555; font-size: .8rem; line-height: 1.4; }
 .card-actions { display: flex; gap: 8px; padding: 8px 12px 12px; }
 .card-actions button { border: 0; border-radius: 7px; background: transparent; color: #555; padding: 7px; font-size: .84rem; }
 .card-actions button:hover:not(:disabled) { background: #f1f1ed; }

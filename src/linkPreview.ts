@@ -5,6 +5,16 @@ export interface LinkPreview {
   hostname: string;
 }
 
+export function displayLinkTitle(preview: LinkPreview, noteTitle: string): string {
+  const title = preview.title.trim();
+  const hostname = preview.hostname.trim();
+  const normalizedTitle = title.toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
+  const normalizedHost = hostname.toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
+  const genericVideoTitles = ["youtube", "youtube.com", "instagram", "instagram.com", "dailymotion", "dailymotion.com"];
+  return title && normalizedTitle !== normalizedHost && !genericVideoTitles.includes(normalizedTitle)
+    ? title : noteTitle.trim() || hostname;
+}
+
 const cache = new Map<string, Promise<LinkPreview | null>>();
 const queue: Array<() => void> = [];
 let active = 0;
