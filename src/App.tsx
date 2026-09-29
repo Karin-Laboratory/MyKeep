@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChangeEvent, FormEvent } from "react";
+import type { ChangeEvent, ClipboardEvent, DragEvent, FormEvent } from "react";
 import { BlobWriter } from "@zip.js/zip.js";
 import { backupFileName, createBackup } from "./exportBackup";
 import type { BackupProgress, BackupResult } from "./exportBackup";
@@ -15,15 +15,23 @@ type NoteList = { notes: Note[]; hasMore: boolean };
 type ImportCounts = { done: number; total: number; success: number; failed: number; skipped: number };
 type ImportProgress = { notes: ImportCounts; attachments: ImportCounts };
 type NoteDraft = NoteInput & { checklist: ChecklistInput[] };
+type PendingImage = { id: string; file: File; previewUrl: string };
 
 const emptyNote: NoteDraft = { title: "", body: "", url: "", pinned: false, archived: false, color: "default", checklist: [] };
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/avif": "avif",
+};
 const COLOR_LABELS: Record<NoteColor, string> = {
   default: "なし", red: "赤", orange: "オレンジ", yellow: "黄", green: "緑", blue: "青", purple: "紫",
 };
 const PREVIEW_SETTING = "mykeep.richLinkPreview";
 const DARK_SETTING = "mykeep.darkMode";
+
+function labelKey(name: string): string {
+  return name.trim().normalize("NFC").toLowerCase();
+}
 
 function savedSetting(key: string, fallback: boolean): boolean {
   try {
@@ -102,8 +110,13 @@ export default function App() {
   const [reload, setReload] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<NoteDraft | null>(null);
-  const [labelText, setLabelText] = useState("");
+  const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
+  const [labelMenuOpen, setLabelMenuOpen] = useState(false);
+  const [creatingLabel, setCreatingLabel] = useState(false);
+  const [newLabelName, setNewLabelName] = useState("");
   const [editorAttachments, setEditorAttachments] = useState<Attachment[]>([]);
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [draggingImage, setDraggingImage] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState("");
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
@@ -119,11 +132,15 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(() => savedSetting(DARK_SETTING, false));
   const [previews, setPreviews] = useState<Record<string, LinkPreview | null>>({});
   const settingsMenuRef = useRef<HTMLDivElement>(null);
+  const labelMenuRef = useRef<HTMLDivElement>(null);
+  const pendingImagesRef = useRef<PendingImage[]>([]);
   const notesRef = useRef(notes);
   const lastListPathRef = useRef("");
   const refreshingRef = useRef(false);
 
   useEffect(() => { notesRef.current = notes; }, [notes]);
+  useEffect(() => { pendingImagesRef.current = pendingImages; }, [pendingImages]);
+  useEffect(() => () => { pendingImagesRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl)); }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = darkMode ? "dark" : "light";
@@ -234,15 +251,68 @@ export default function App() {
     };
   }, [settingsMenuOpen]);
 
+  useEffect(() => {
+    if (!labelMenuOpen) return;
+    const closeOutside = (event: MouseEvent) => {
+      if (!labelMenuRef.current?.contains(event.target as Node)) setLabelMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeOutside);
+    return () => document.removeEventListener("mousedown", closeOutside);
+  }, [labelMenuOpen]);
+
+  function clearPendingImages() {
+    pendingImagesRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+    pendingImagesRef.current = [];
+    setPendingImages([]);
+  }
+
+  function closeEditor() {
+    clearPendingImages();
+    setDraft(null);
+    setLabelMenuOpen(false);
+    setCreatingLabel(false);
+    setDraggingImage(false);
+  }
+
   function openEditor(note?: Note) {
     setError("");
+    clearPendingImages();
     setEditingId(note?.id ?? null);
     setEditorAttachments(note?.attachments ?? []);
-    setLabelText(note?.labels.join("\n") ?? "");
+    setSelectedLabels(note?.labels ?? []);
+    setLabelMenuOpen(false);
+    setCreatingLabel(false);
+    setNewLabelName("");
     setDraft(note
       ? { title: note.title, body: note.body, url: note.url, pinned: note.pinned, archived: note.archived, color: note.color,
         checklist: note.checklist.map(({ text, checked }) => ({ text, checked })) }
       : { ...emptyNote, archived: view === "archived" });
+  }
+
+  function toggleLabel(name: string) {
+    setSelectedLabels((current) => current.some((label) => labelKey(label) === labelKey(name))
+      ? current.filter((label) => labelKey(label) !== labelKey(name))
+      : current.length < 50 ? [...current, name] : current);
+  }
+
+  function addNewLabel() {
+    const name = newLabelName.trim().normalize("NFC");
+    if (!name || name.length > 100) {
+      setError("ラベル名は1〜100文字で入力してください。");
+      return;
+    }
+    const existing = [...availableLabels, ...selectedLabels].find((label) => labelKey(label) === labelKey(name));
+    const selected = existing ?? name;
+    if (!selectedLabels.some((label) => labelKey(label) === labelKey(selected))) {
+      if (selectedLabels.length >= 50) {
+        setError("ラベルは50件まで選択できます。");
+        return;
+      }
+      setSelectedLabels((current) => [...current, selected]);
+    }
+    setNewLabelName("");
+    setCreatingLabel(false);
+    setError("");
   }
 
   function selectView(nextView: View) {
@@ -291,15 +361,39 @@ export default function App() {
     setWorking(true);
     setError("");
     try {
-      const labels = labelText.split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
-      const input = { ...draft, labels };
-      if (editingId) {
-        await api(`/api/notes/${editingId}`, { method: "PATCH", body: JSON.stringify(input) });
-      } else {
-        await api("/api/notes", { method: "POST", body: JSON.stringify(input) });
+      const images = pendingImagesRef.current;
+      const title = !editingId && !draft.title.trim() && !draft.body.trim() && !draft.url.trim()
+        && !draft.checklist.some((item) => item.text.trim()) && images.length
+        ? images[0].file.name.replace(/\.[^.]+$/, "") || "画像メモ" : draft.title;
+      const input = { ...draft, title, labels: selectedLabels };
+      const { note } = editingId
+        ? await api<{ note: Note }>(`/api/notes/${editingId}`, { method: "PATCH", body: JSON.stringify(input) })
+        : await api<{ note: Note }>("/api/notes", { method: "POST", body: JSON.stringify(input) });
+      if (!editingId) {
+        setEditingId(note.id);
+        setDraft((current) => current ? { ...current, title } : current);
       }
-      setDraft(null);
+      const failed: PendingImage[] = [];
+      for (const image of images) {
+        try {
+          const { attachment } = await api<{ attachment: Attachment }>(`/api/notes/${note.id}/attachments`, {
+            method: "POST", body: image.file,
+            headers: { "Content-Type": image.file.type, "X-File-Name": encodeURIComponent(image.file.name) },
+          });
+          setEditorAttachments((current) => [...current, attachment]);
+          URL.revokeObjectURL(image.previewUrl);
+        } catch {
+          failed.push(image);
+        }
+      }
+      pendingImagesRef.current = failed;
+      setPendingImages(failed);
       setReload((value) => value + 1);
+      if (failed.length) {
+        setError(`メモは保存しました。画像のアップロードに失敗: ${failed.map((item) => item.file.name).join("、")}。保存を押すと再試行できます。`);
+      } else {
+        closeEditor();
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "保存に失敗しました。");
     } finally {
@@ -327,7 +421,7 @@ export default function App() {
     setError("");
     try {
       await api(`/api/notes/${editingId}`, { method: "DELETE" });
-      setDraft(null);
+      closeEditor();
       setReload((value) => value + 1);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "削除に失敗しました。");
@@ -364,39 +458,53 @@ export default function App() {
     }
   }
 
-  async function addImages(event: ChangeEvent<HTMLInputElement>) {
-    if (!editingId || working) return;
+  function queueImages(files: File[]) {
+    if (working || !files.length) return;
+    const valid: PendingImage[] = [];
+    const invalid: string[] = [];
+    for (const original of files) {
+      if (!IMAGE_TYPES.includes(original.type)) {
+        invalid.push(`${original.name || "画像"}: JPEG・PNG・WebP・GIF・AVIF のみ対応しています。`);
+      } else if (!original.size || original.size > MAX_IMAGE_BYTES) {
+        invalid.push(`${original.name || "画像"}: 1枚20MB以下にしてください。`);
+      } else {
+        const file = original.name ? original : new File([original], `貼り付け画像-${Date.now()}.${IMAGE_EXTENSIONS[original.type]}`, { type: original.type });
+        valid.push({ id: crypto.randomUUID(), file, previewUrl: URL.createObjectURL(file) });
+      }
+    }
+    if (valid.length) {
+      pendingImagesRef.current = [...pendingImagesRef.current, ...valid];
+      setPendingImages(pendingImagesRef.current);
+    }
+    setError(invalid.join(" "));
+  }
+
+  function addImages(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.currentTarget.files ?? []);
     event.currentTarget.value = "";
-    if (!files.length) return;
-    if (files.some((file) => !IMAGE_TYPES.includes(file.type))) {
-      setError("JPEG・PNG・WebP・GIF・AVIF の画像を選んでください。");
-      return;
-    }
-    if (files.some((file) => file.size > MAX_IMAGE_BYTES)) {
-      setError("画像は1枚20MB以下にしてください。");
-      return;
-    }
+    queueImages(files);
+  }
 
-    setWorking(true);
-    setError("");
-    try {
-      for (const file of files) {
-        const { attachment } = await api<{ attachment: Attachment }>(`/api/notes/${editingId}/attachments`, {
-          method: "POST",
-          body: file,
-          headers: { "Content-Type": file.type, "X-File-Name": encodeURIComponent(file.name) },
-        });
-        setEditorAttachments((current) => [...current, attachment]);
-        setNotes((current) => current.map((note) => note.id === editingId
-          ? { ...note, attachments: [...note.attachments, attachment] }
-          : note));
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "画像の追加に失敗しました。");
-    } finally {
-      setWorking(false);
-    }
+  function pasteImages(event: ClipboardEvent<HTMLFormElement>) {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile()).filter((file): file is File => file !== null);
+    if (!files.length) return;
+    event.preventDefault();
+    queueImages(files);
+  }
+
+  function dropImages(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setDraggingImage(false);
+    queueImages(Array.from(event.dataTransfer.files));
+  }
+
+  function removePendingImage(id: string) {
+    const removed = pendingImagesRef.current.find((item) => item.id === id);
+    if (removed) URL.revokeObjectURL(removed.previewUrl);
+    pendingImagesRef.current = pendingImagesRef.current.filter((item) => item.id !== id);
+    setPendingImages(pendingImagesRef.current);
   }
 
   async function removeImage(attachment: Attachment) {
@@ -525,6 +633,9 @@ export default function App() {
     }
   }
 
+  const labelOptions = [...availableLabels, ...selectedLabels].filter((name, index, all) =>
+    all.findIndex((candidate) => labelKey(candidate) === labelKey(name)) === index);
+
   return (
     <main className="app">
       <header className="topbar">
@@ -644,15 +755,15 @@ export default function App() {
       </div>}
 
       {draft && (
-        <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !working) setDraft(null); }}>
-          <form className="editor" data-color={draft.color} onSubmit={save} aria-label={editingId ? "メモを編集" : "新規メモ"}>
+        <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !working) closeEditor(); }}>
+          <form className="editor" data-color={draft.color} onSubmit={save} onPaste={pasteImages} aria-label={editingId ? "メモを編集" : "新規メモ"}>
             <div className="editor-heading">
               <h2>{editingId ? "メモを編集" : "新規メモ"}</h2>
-              <button type="button" className="close" onClick={() => setDraft(null)} disabled={working} aria-label="閉じる">×</button>
+              <button type="button" className="close" onClick={closeEditor} disabled={working} aria-label="閉じる">×</button>
             </div>
             {error && <p className="error" role="alert">{error}</p>}
             <label>タイトル<input value={draft.title} maxLength={300} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
-            <label>本文<textarea value={draft.body} maxLength={100000} rows={9} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></label>
+            <label>本文<textarea value={draft.body} maxLength={100000} rows={4} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></label>
             <section className="checklist-editor" aria-label="チェックリスト">
               <div className="section-heading"><strong>チェックリスト</strong>
                 <button type="button" onClick={() => setDraft({ ...draft, checklist: [...draft.checklist, { text: "", checked: false }] })} disabled={draft.checklist.length >= 500}>＋ 項目を追加</button>
@@ -666,7 +777,33 @@ export default function App() {
                   onClick={() => setDraft({ ...draft, checklist: draft.checklist.filter((_, position) => position !== index) })}>削除</button>
               </div>)}
             </section>
-            <label>ラベル（1行に1件）<textarea value={labelText} rows={2} onChange={(event) => setLabelText(event.target.value)} placeholder="仕事" /></label>
+            <section className="editor-labels" aria-label="ラベル">
+              <strong>ラベル</strong>
+              <div className="label-picker" ref={labelMenuRef}>
+                <button type="button" className="label-picker-toggle" aria-expanded={labelMenuOpen} aria-controls="editor-label-options"
+                  onClick={() => setLabelMenuOpen((open) => !open)}>ラベルを選択 <span aria-hidden="true">▾</span></button>
+                {labelMenuOpen && <div className="label-picker-menu" id="editor-label-options">
+                  <button type="button" className="create-label-button" onClick={() => setCreatingLabel((current) => !current)}>＋ 新規ラベルを作成</button>
+                  {creatingLabel && <div className="new-label-row">
+                    <input aria-label="新しいラベル" placeholder="新しいラベル" value={newLabelName} maxLength={100}
+                      onChange={(event) => setNewLabelName(event.target.value)}
+                      onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addNewLabel(); } }} />
+                    <button type="button" onClick={addNewLabel}>追加</button>
+                  </div>}
+                  <div className="label-options">
+                    {labelOptions.map((name) => <label key={labelKey(name)}>
+                      <input type="checkbox" checked={selectedLabels.some((label) => labelKey(label) === labelKey(name))}
+                        onChange={() => toggleLabel(name)} />{name}
+                    </label>)}
+                  </div>
+                </div>}
+              </div>
+              {selectedLabels.length > 0 && <div className="selected-labels">
+                {selectedLabels.map((name) => <span className="selected-label" key={labelKey(name)}>{name}
+                  <button type="button" aria-label={`${name}を解除`} onClick={() => toggleLabel(name)}>×</button>
+                </span>)}
+              </div>}
+            </section>
             <label>URL<input type="url" value={draft.url} maxLength={2000} placeholder="https://" onChange={(event) => setDraft({ ...draft, url: event.target.value })} /></label>
             <label>色<select value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value as NoteColor })}>
               {NOTE_COLORS.map((color) => <option value={color} key={color}>{COLOR_LABELS[color]}</option>)}
@@ -675,13 +812,21 @@ export default function App() {
               <label><input type="checkbox" checked={draft.pinned} onChange={(event) => setDraft({ ...draft, pinned: event.target.checked })} /> ピン留め</label>
               <label><input type="checkbox" checked={draft.archived} onChange={(event) => setDraft({ ...draft, archived: event.target.checked })} /> アーカイブ</label>
             </div>
-            {editingId ? (
-              <section className="image-section" aria-label="添付ファイル">
-                <label className="upload-label">画像を追加
+            <section className="image-section" aria-label="添付ファイル">
+              <strong>画像を追加</strong>
+              <div className={`image-dropzone${draggingImage ? " dragging" : ""}`}
+                onDragEnter={(event) => { if (Array.from(event.dataTransfer.types).includes("Files")) { event.preventDefault(); setDraggingImage(true); } }}
+                onDragOver={(event) => { if (Array.from(event.dataTransfer.types).includes("Files")) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDraggingImage(true); } }}
+                onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDraggingImage(false); }}
+                onDrop={dropImages}>
+                <label className="upload-label">ファイルを選択
                   <input type="file" accept={IMAGE_TYPES.join(",")} multiple onChange={addImages} disabled={working} />
                 </label>
-                {editorAttachments.length > 0 && (
-                  <div className="editor-images">
+                <span className="image-hint">Ctrl+Vで貼り付け / ここへドラッグ＆ドロップ</span>
+              </div>
+              {editorAttachments.length > 0 && <>
+                <small className="image-group-label">保存済み</small>
+                <div className="editor-images">
                     {editorAttachments.map((attachment) => (
                       <div className="editor-image" key={attachment.id}>
                         {IMAGE_TYPES.includes(attachment.mime_type)
@@ -690,13 +835,22 @@ export default function App() {
                         <button type="button" onClick={() => removeImage(attachment)} disabled={working} aria-label={`${attachment.filename}を削除`}>削除</button>
                       </div>
                     ))}
-                  </div>
-                )}
-              </section>
-            ) : <p className="image-hint">画像はメモを保存してから追加できます。</p>}
+                </div>
+              </>}
+              {pendingImages.length > 0 && <>
+                <small className="image-group-label">追加予定</small>
+                <div className="editor-images">
+                  {pendingImages.map((image) => <div className="editor-image" key={image.id}>
+                    <img src={image.previewUrl} alt={image.file.name} />
+                    <span className="pending-image-name" title={image.file.name}>{image.file.name}</span>
+                    <button type="button" onClick={() => removePendingImage(image.id)} disabled={working} aria-label={`${image.file.name}を取り消す`}>取り消す</button>
+                  </div>)}
+                </div>
+              </>}
+            </section>
             <div className="editor-actions">
               {editingId && <button type="button" className="danger" onClick={remove} disabled={working}>ゴミ箱へ</button>}
-              <button type="submit" className="primary" disabled={working || !(editingId || draft.title.trim() || draft.body.trim() || draft.url.trim() || draft.checklist.length)}>{working ? "保存中…" : "保存"}</button>
+              <button type="submit" className="primary" disabled={working || !(editingId || draft.title.trim() || draft.body.trim() || draft.url.trim() || draft.checklist.length || pendingImages.length)}>{working ? "保存中…" : "保存"}</button>
             </div>
           </form>
         </div>

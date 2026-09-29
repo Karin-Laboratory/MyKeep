@@ -81,13 +81,27 @@ button.card-content:hover { background: #ffffff70; }
 .utility-modal p { margin: 0; line-height: 1.6; }
 .setting-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
 .setting-row input { width: 18px; height: 18px; }
-.editor { width: min(100%, 600px); max-height: calc(100vh - 32px); overflow-y: auto; border-radius: 14px; background: var(--note-bg, #fff); padding: 22px; box-shadow: 0 18px 55px #0003; display: grid; gap: 16px; }
+.editor { width: min(100%, 600px); max-height: calc(100vh - 32px); overflow-y: auto; border-radius: 14px; background: var(--note-bg, #fff); padding: 22px; box-shadow: 0 18px 55px #0003; display: grid; gap: 12px; }
 .editor-heading { display: flex; justify-content: space-between; align-items: center; }
 h2 { margin: 0; font-size: 1.15rem; }
 .close { border: 0; background: transparent; font-size: 1.8rem; line-height: 1; }
 .editor > label { display: grid; gap: 6px; font-size: .9rem; font-weight: 600; }
 .editor input:not([type="checkbox"]), .editor textarea, .editor select { width: 100%; border: 1px solid #cecec8; border-radius: 8px; padding: 10px; font-weight: 400; color: #242424; background: #fff; }
-.editor textarea { resize: vertical; min-height: 120px; }
+.editor textarea { resize: vertical; min-height: 0; }
+.editor-labels { display: grid; gap: 6px; font-size: .9rem; }
+.label-picker { position: relative; }
+.label-picker-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; border: 1px solid #cecec8; border-radius: 8px; padding: 9px 10px; background: #fff; color: #242424; text-align: left; }
+.label-picker-menu { position: absolute; z-index: 2; top: calc(100% + 4px); left: 0; right: 0; max-height: 210px; overflow-y: auto; border: 1px solid #cecec8; border-radius: 8px; background: #fff; padding: 6px; box-shadow: 0 8px 20px #0002; }
+.create-label-button { width: 100%; border: 0; border-radius: 5px; background: transparent; color: inherit; padding: 7px; text-align: left; }
+.create-label-button:hover, .label-options label:hover { background: #f1f1ed; }
+.new-label-row { display: flex; gap: 6px; padding: 5px; }
+.new-label-row input { flex: 1; min-width: 0; }
+.new-label-row button { border: 1px solid #cecec8; border-radius: 6px; background: #f4c84c; padding: 4px 9px; }
+.label-options { display: grid; }
+.label-options label { display: flex; align-items: center; gap: 8px; border-radius: 5px; padding: 7px; overflow-wrap: anywhere; }
+.selected-labels { display: flex; flex-wrap: wrap; gap: 5px; }
+.selected-label { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; border-radius: 999px; background: #e8e8e2; padding: 3px 7px; overflow-wrap: anywhere; }
+.selected-label button { border: 0; background: transparent; color: inherit; padding: 0 2px; font-size: 1.1rem; line-height: 1; }
 .editor-options { display: flex; gap: 22px; flex-wrap: wrap; }
 .editor-options label { display: inline-flex; align-items: center; gap: 5px; }
 .checklist-editor { display: grid; gap: 8px; }
@@ -96,14 +110,18 @@ h2 { margin: 0; font-size: 1.15rem; }
 .checklist-row { display: flex; align-items: center; gap: 8px; }
 .checklist-row input[type="text"], .checklist-row input:not([type]) { flex: 1; min-width: 0; }
 .checklist-row button { color: #a52f2f; }
-.image-section { display: grid; gap: 12px; }
+.image-section { display: grid; gap: 6px; font-size: .9rem; }
+.image-dropzone { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; border: 1px dashed #b8b8ae; border-radius: 8px; padding: 8px 10px; }
+.image-dropzone.dragging { border-color: #ad8014; background: #fff2c5; }
 .upload-label { display: grid; gap: 6px; font-size: .9rem; font-weight: 600; }
-.upload-label input { max-width: 100%; font-weight: 400; }
-.editor-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+.upload-label input { max-width: 100%; font-weight: 400; font-size: .8rem; }
+.image-group-label { color: #666; }
+.editor-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 8px; }
 .editor-image { min-width: 0; display: grid; gap: 5px; }
-.editor-image img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 7px; background: #f1f1ed; }
+.editor-image img { width: 100%; height: 76px; object-fit: cover; border-radius: 7px; background: #f1f1ed; }
 .editor-image a { overflow-wrap: anywhere; color: #225fb5; font-size: .85rem; }
 .editor-image button { justify-self: start; border: 0; background: transparent; color: #a52f2f; padding: 5px 0; }
+.pending-image-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .75rem; }
 .image-hint { margin: 0; color: #777; font-size: .84rem; }
 .editor-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .danger { margin-right: auto; border: 0; background: transparent; color: #a52f2f; padding: 10px; }
@@ -139,6 +157,12 @@ h2 { margin: 0; font-size: 1.15rem; }
 :root[data-theme="dark"] .menu-toggle:hover, :root[data-theme="dark"] .icon-button:hover { background: #33363a; }
 :root[data-theme="dark"] .search-field, :root[data-theme="dark"] .sidebar-labels h2 { color: #bcbdbd; }
 :root[data-theme="dark"] .search-field input, :root[data-theme="dark"] .editor input:not([type="checkbox"]), :root[data-theme="dark"] .editor textarea, :root[data-theme="dark"] .editor select { background: #282a2d; border-color: #55595d; color: #f4f1e9; }
+:root[data-theme="dark"] .label-picker-toggle, :root[data-theme="dark"] .label-picker-menu { background: #282a2d; border-color: #55595d; color: #f4f1e9; }
+:root[data-theme="dark"] .create-label-button:hover, :root[data-theme="dark"] .label-options label:hover { background: #373a3e; }
+:root[data-theme="dark"] .selected-label { background: #55575b; }
+:root[data-theme="dark"] .image-dropzone { border-color: #777a7d; }
+:root[data-theme="dark"] .image-dropzone.dragging { border-color: #f4c84c; background: #504524; }
+:root[data-theme="dark"] .image-group-label { color: #bcbcb9; }
 :root[data-theme="dark"] .sidebar { background: #18191b; }
 :root[data-theme="dark"] .sidebar-nav button { color: #e0ded8; }
 :root[data-theme="dark"] .sidebar-nav button:hover { background: #303237; }
