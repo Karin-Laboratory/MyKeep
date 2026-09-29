@@ -14,6 +14,7 @@ export interface KeepAttachmentRef {
 
 export interface KeepImportRecord {
   note: KeepImportNote;
+  trashed: boolean;
   sourcePath: string;
   attachments: KeepAttachmentRef[];
 }
@@ -50,7 +51,6 @@ function keepTimestamp(value: unknown): string | null {
 export function parseKeepNote(value: unknown, hasAttachments = false): KeepImportNote | "skip" | "fail" {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "fail";
   const source = value as Record<string, unknown>;
-  if (source.isTrashed === true) return "skip";
   if (source.isTrashed !== undefined && typeof source.isTrashed !== "boolean") return "fail";
 
   const title = source.title ?? "";
@@ -77,7 +77,7 @@ export function parseKeepNote(value: unknown, hasAttachments = false): KeepImpor
     }).filter((name, index, all) => all.findIndex((other) => other.toLowerCase() === name.toLowerCase()) === index)
     : [];
   if (checklist.length > 500 || labels.length > 50) return "fail";
-  if (!title.trim() && !body.trim() && !checklist.length && !hasAttachments) return "skip";
+  if (!title.trim() && !body.trim() && !checklist.length && !hasAttachments && source.isTrashed !== true) return "skip";
 
   const created = keepTimestamp(source.createdTimestampUsec);
   const updated = keepTimestamp(source.userEditedTimestampUsec);
@@ -229,7 +229,7 @@ export async function readKeepZip(file: Blob): Promise<KeepZipResult> {
         if (note === "skip") result.skipped += 1;
         else if (note === "fail") result.failed += 1;
         else {
-          result.notes.push({ note, sourcePath: path, attachments });
+          result.notes.push({ note, trashed: (value as Record<string, unknown>).isTrashed === true, sourcePath: path, attachments });
           result.attachmentTotal += attachments.length;
         }
       } catch {

@@ -304,14 +304,14 @@ function relationStatements(noteId: string, input: NoteInput, env: Env, replace:
   return statements;
 }
 
-async function insertNote(input: NoteInput, env: Env, timestamps?: { created_at: string; updated_at: string }): Promise<Note> {
+async function insertNote(input: NoteInput, env: Env, timestamps?: { created_at: string; updated_at: string }, deletedAt: string | null = null): Promise<Note> {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const createdAt = timestamps?.created_at ?? now;
   const updatedAt = timestamps?.updated_at ?? now;
   const statements = [env.DB.prepare(
-    "INSERT INTO notes (id, title, body, url, pinned, archived, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  ).bind(id, input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, createdAt, updatedAt),
+    "INSERT INTO notes (id, title, body, url, pinned, archived, color, deleted_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).bind(id, input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, deletedAt, createdAt, updatedAt),
   ...relationStatements(id, input, env, false)];
   await env.DB.batch(statements);
   const row = await env.DB.prepare(`${SELECT_NOTE} WHERE id = ?`).bind(id).first<NoteRow>();
@@ -330,13 +330,14 @@ async function importKeepNote(request: Request, env: Env): Promise<Response> {
   if (!input || !value || typeof value !== "object" || Array.isArray(value)) {
     return json({ error: "インポートするメモを確認してください。" }, 400);
   }
-  const { created_at, updated_at } = value as Record<string, unknown>;
+  const { created_at, updated_at, isTrashed } = value as Record<string, unknown>;
+  if (isTrashed !== undefined && typeof isTrashed !== "boolean") return json({ error: "ゴミ箱の指定が正しくありません。" }, 400);
   if (typeof created_at !== "string" || typeof updated_at !== "string"
     || !Number.isFinite(Date.parse(created_at)) || !Number.isFinite(Date.parse(updated_at))
     || new Date(created_at).toISOString() !== created_at || new Date(updated_at).toISOString() !== updated_at) {
     return json({ error: "日時を確認してください。" }, 400);
   }
-  return json({ note: await insertNote(input, env, { created_at, updated_at }) }, 201);
+  return json({ note: await insertNote(input, env, { created_at, updated_at }, isTrashed ? new Date().toISOString() : null) }, 201);
 }
 
 async function updateNote(id: string, request: Request, env: Env): Promise<Response> {
@@ -371,17 +372,43 @@ async function restoreNote(id: string, env: Env): Promise<Response> {
   return json({ ok: true });
 }
 
-async function permanentlyDeleteNote(id: string, env: Env): Promise<Response> {
-  const note = await env.DB.prepare("SELECT id FROM notes WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
-  if (!note) return json({ error: "メモが見つかりません。" }, 404);
+async function deleteTrashedNote(id: string, env: Env, cutoff?: string): Promise<boolean> {
+  const condition = cutoff ? " AND deleted_at <= ?" : "";
+  const bindings = cutoff ? [id, cutoff] : [id];
+  const note = await env.DB.prepare(`SELECT id FROM notes WHERE id = ? AND deleted_at IS NOT NULL${condition}`).bind(...bindings).first();
+  if (!note) return false;
   const attachmentsResult = await env.DB.prepare("SELECT r2_key FROM attachments WHERE note_id = ?").bind(id).all<{ r2_key: string }>();
   const keys = (attachmentsResult.results ?? []).map((row) => row.r2_key);
   for (let index = 0; index < keys.length; index += 1000) {
     await env.IMAGES.delete(keys.slice(index, index + 1000));
   }
-  const result = await env.DB.prepare("DELETE FROM notes WHERE id = ? AND deleted_at IS NOT NULL").bind(id).run();
-  if (!result.meta.changes) return json({ error: "メモが見つかりません。" }, 404);
+  const result = await env.DB.prepare(`DELETE FROM notes WHERE id = ? AND deleted_at IS NOT NULL${condition}`).bind(...bindings).run();
+  return result.meta.changes > 0;
+}
+
+async function permanentlyDeleteNote(id: string, env: Env): Promise<Response> {
+  if (!await deleteTrashedNote(id, env)) return json({ error: "メモが見つかりません。" }, 404);
   return json({ ok: true });
+}
+
+async function purgeOldTrash(env: Env): Promise<void> {
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  let afterId = "";
+  while (true) {
+    const result = await env.DB.prepare(
+      "SELECT id FROM notes WHERE deleted_at IS NOT NULL AND deleted_at <= ? AND id > ? ORDER BY id LIMIT 50",
+    ).bind(cutoff, afterId).all<{ id: string }>();
+    const rows = result.results ?? [];
+    for (const row of rows) {
+      afterId = row.id;
+      try {
+        await deleteTrashedNote(row.id, env, cutoff);
+      } catch (error) {
+        console.error("trash_purge_note_failed", row.id, error);
+      }
+    }
+    if (rows.length < 50) break;
+  }
 }
 
 async function persistAttachment(noteId: string, filename: string, mime: string, bytes: Uint8Array, env: Env): Promise<Attachment> {
@@ -401,7 +428,7 @@ async function persistAttachment(noteId: string, filename: string, mime: string,
 }
 
 async function uploadAttachment(noteId: string, request: Request, env: Env): Promise<Response> {
-  const note = await env.DB.prepare("SELECT id FROM notes WHERE id = ? AND deleted_at IS NULL").bind(noteId).first();
+  const note = await env.DB.prepare("SELECT id FROM notes WHERE id = ?").bind(noteId).first();
   if (!note) return json({ error: "メモが見つかりません。" }, 404);
 
   const mime = request.headers.get("Content-Type")?.toLowerCase() ?? "";
@@ -524,6 +551,9 @@ async function deleteAttachment(noteId: string, attachmentId: string, env: Env):
 }
 
 export default {
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    await purgeOldTrash(env);
+  },
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/api/")) return json({ error: "見つかりません。" }, 404);

@@ -13,7 +13,7 @@ import type { Attachment, ChecklistInput, Note, NoteColor, NoteInput } from "./t
 type View = "active" | "archived" | "trash";
 type NoteList = { notes: Note[]; hasMore: boolean };
 type ImportCounts = { done: number; total: number; success: number; failed: number; skipped: number };
-type ImportProgress = { notes: ImportCounts; attachments: ImportCounts };
+type ImportProgress = { notes: ImportCounts & { trashed: number }; attachments: ImportCounts };
 type NoteDraft = NoteInput & { checklist: ChecklistInput[] };
 type PendingImage = { id: string; file: File; previewUrl: string };
 
@@ -584,7 +584,7 @@ export default function App() {
       extracted = await readKeepZip(file);
       const progress: ImportProgress = {
         notes: { done: extracted.failed + extracted.skipped, total: extracted.total,
-          success: 0, failed: extracted.failed, skipped: extracted.skipped },
+          success: 0, trashed: 0, failed: extracted.failed, skipped: extracted.skipped },
         attachments: { done: 0, total: extracted.attachmentTotal, success: 0, failed: 0, skipped: 0 },
       };
       setImportProgress({ notes: { ...progress.notes }, attachments: { ...progress.attachments } });
@@ -592,9 +592,12 @@ export default function App() {
       for (const record of extracted.notes) {
         let noteId: string | null = null;
         try {
-          const { note } = await api<{ note: Note }>("/api/import/keep", { method: "POST", body: JSON.stringify(record.note) });
+          const { note } = await api<{ note: Note }>("/api/import/keep", {
+            method: "POST", body: JSON.stringify({ ...record.note, isTrashed: record.trashed }),
+          });
           noteId = note.id;
           progress.notes.success += 1;
+          if (record.trashed) progress.notes.trashed += 1;
         } catch {
           progress.notes.failed += 1;
         }
@@ -819,7 +822,7 @@ export default function App() {
             </label>
             {importMessage && <p role="status">{importMessage}</p>}
             {importProgress && <p>メモ: {importProgress.notes.done} / {importProgress.notes.total}<br />
-              成功 {importProgress.notes.success}　失敗 {importProgress.notes.failed}　スキップ {importProgress.notes.skipped}<br />
+              成功 {importProgress.notes.success}　ゴミ箱として取込 {importProgress.notes.trashed}　失敗 {importProgress.notes.failed}　スキップ {importProgress.notes.skipped}<br />
               画像・添付: {importProgress.attachments.done} / {importProgress.attachments.total}<br />
               成功 {importProgress.attachments.success}　失敗 {importProgress.attachments.failed}　スキップ {importProgress.attachments.skipped}</p>}
           </div>
