@@ -65,6 +65,10 @@ Keep JSON の `attachments[].filePath` を、同じ Keep フォルダ内の ZIP 
 
 **Access の保護と `/api/capture` のAPIキー認証を確認するまで個人データを保存しないでください。** 通常のWeb APIと画像はWebと同じWorker経由で提供し、Accessで保護します。`/api/capture` はAccessの例外パスになるため、APIキーが必須です。
 
+## 継続デプロイ
+
+既存の `mykeep` Worker は Cloudflare Workers Builds で GitHub の `kishi27/MyKeep` に接続しています。`main` への push で自動的に `npm run build` と `npx wrangler deploy` が実行されます。ルートディレクトリは `/`、プレビュービルドは無効です。結果は Cloudflare の **Workers & Pages → mykeep → デプロイ** で確認します。手動で再デプロイする場合は `npm run deploy` を使用します。
+
 ## 構成
 
 - `src/`: React の画面
