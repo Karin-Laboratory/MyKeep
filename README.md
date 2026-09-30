@@ -4,6 +4,26 @@
 
 MyKeepは独立した個人向けアプリであり、Googleの公式製品ではありません。Google Keepとの関係は、Google Takeoutデータの移行対応です。
 
+## スクリーンショット
+
+### PC
+
+広い画面では5列のMasonry表示。
+
+<img src="docs/screenshots/mykeep-desktop.png" alt="MyKeep PC版" width="1400">
+
+### スマホ
+
+スマホでは2列表示。
+
+<img src="docs/screenshots/mykeep-mobile.jpg" alt="MyKeep スマホ版" width="420">
+
+### Chrome拡張
+
+現在のページをMyKeepへ保存。
+
+<img src="docs/screenshots/mykeep-extension.png" alt="MyKeep Capture Chrome拡張" width="360">
+
 ## 主な機能
 
 - **メモ**：作成・編集・削除、URL保存、ピン留め、アーカイブ、色、チェックリスト、複数ラベル、タイトル・本文・URLの検索。
