@@ -382,11 +382,23 @@ async function updateNote(id: string, request: Request, env: Env): Promise<Respo
   return json({ note: (await withRelations([row!], env))[0] });
 }
 
-async function moveToTrash(id: string, env: Env): Promise<Response> {
+async function moveToTrash(id: string, request: Request, env: Env): Promise<Response> {
   const now = new Date().toISOString();
+  let deletedAt = now;
+  // 復元のUndoでは元のゴミ箱日時を戻し、30日の削除期限を維持する。
+  if (request.body !== null) {
+    const input = await readInput(request);
+    if (!input || typeof input !== "object" || Array.isArray(input)) return json({ error: "ゴミ箱日時を確認してください。" }, 400);
+    const value = (input as Record<string, unknown>).deleted_at;
+    const timestamp = typeof value === "string" ? Date.parse(value) : NaN;
+    if (!Number.isFinite(timestamp) || timestamp > Date.now() || new Date(timestamp).toISOString() !== value) {
+      return json({ error: "ゴミ箱日時を確認してください。" }, 400);
+    }
+    deletedAt = value as string;
+  }
   const result = await env.DB.prepare(
     "UPDATE notes SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
-  ).bind(now, now, id).run();
+  ).bind(deletedAt, now, id).run();
   if (!result.meta.changes) return json({ error: "メモが見つかりません。" }, 404);
   return json({ ok: true });
 }
@@ -668,7 +680,7 @@ export default {
       if (match) {
         if (request.method === "GET") return await getNote(match[1], env);
         if (request.method === "PATCH") return await updateNote(match[1], request, env);
-        if (request.method === "DELETE") return await moveToTrash(match[1], env);
+        if (request.method === "DELETE") return await moveToTrash(match[1], request, env);
       }
       return json({ error: "見つかりません。" }, 404);
     } catch (error) {

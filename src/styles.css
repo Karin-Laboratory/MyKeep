@@ -36,6 +36,21 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 700; }
 .sidebar-labels h2 { margin: 0 0 8px; padding: 0 12px; color: #777; font-size: .84rem; font-weight: 600; }
 .sidebar-scrim { display: none; }
 .main-content { flex: 1; min-width: 0; }
+.list-tools { display: flex; justify-content: flex-end; min-height: 40px; margin-bottom: 8px; }
+.list-tools button, .bulk-toolbar button { border: 1px solid #cecec8; border-radius: 8px; background: white; color: inherit; padding: 8px 12px; }
+.bulk-result { color: #666; font-size: .9rem; }
+.selecting .main-content { padding-bottom: 190px; }
+.selecting .card { position: relative; cursor: pointer; }
+.selecting .card-content { padding-top: 40px; }
+.card.selected-card { outline: 2px solid #b88913; outline-offset: -2px; }
+.card-select { position: absolute; top: 8px; left: 8px; width: 24px; height: 24px; border: 1px solid #999; border-radius: 50%; background: white; color: #242424; padding: 0; font-weight: 700; }
+.card-select[aria-pressed="true"] { background: #f4c84c; border-color: #ad8014; }
+.card-select:focus-visible { outline: 2px solid #bd8f17; outline-offset: 2px; }
+.bulk-toolbar { position: fixed; z-index: 8; left: 20px; right: 20px; bottom: max(16px, env(safe-area-inset-bottom)); max-width: 850px; margin: 0 auto; display: grid; gap: 8px; padding: 12px; border: 1px solid #dddcd5; border-radius: 12px; background: white; box-shadow: 0 4px 20px #0003; }
+.bulk-selection-controls, .bulk-operation-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.bulk-selection-controls strong { margin-right: auto; }
+.bulk-toolbar .bulk-danger { color: #a52f2f; }
+.selecting .snackbar { bottom: 230px; }
 .import-content { display: grid; gap: 8px; padding: 12px 0 2px; font-size: .9rem; }
 .import-content label { display: grid; gap: 6px; }
 .import-content input { max-width: 100%; }
@@ -153,10 +168,29 @@ h2 { margin: 0; font-size: 1.15rem; }
   .sidebar.open { visibility: visible; pointer-events: auto; transform: translateX(0); }
   .sidebar-title { display: block; margin: 0 12px 24px; font-size: 1.35rem; font-weight: 700; }
   .sidebar-scrim { display: block; position: fixed; z-index: 20; inset: 0 0 0 min(280px, calc(100vw - 40px)); border: 0; background: #0006; }
-  .grid { columns: 1; }
+  .grid { columns: 2; column-gap: 10px; }
   .card { margin-bottom: 12px; }
+  .card-content { padding: 12px 10px 6px; gap: 6px; font-size: .88rem; }
+  .card-content > strong { font-size: .9rem; }
+  .label-chip { padding: 2px 6px; font-size: .7rem; }
+  .card-actions { flex-wrap: wrap; gap: 2px; padding: 4px 6px 8px; }
+  .card-actions button { padding: 6px 4px; font-size: .75rem; }
+  .note-link { margin: 2px 10px 8px; }
+  .link-preview { margin: 4px 6px 8px; }
+  .link-preview img { max-height: 120px; }
+  .link-preview-details { padding: 7px; }
+  .link-preview-details strong { font-size: .8rem; }
+  .link-preview-details > span, .link-preview-details small { font-size: .73rem; }
+  .trash-countdown { margin: 4px 10px 0; font-size: .7rem; }
+  .bulk-toolbar { left: 10px; right: 10px; padding: 10px; }
+  .bulk-toolbar button { padding: 7px 9px; font-size: .85rem; }
+  .bulk-selection-controls, .bulk-operation-controls { gap: 6px; }
   .editor { padding: 18px; }
   .utility-modal { padding: 18px; }
+}
+@media (max-width: 300px) {
+  .grid { columns: 1; }
+  .selecting .main-content { padding-bottom: 260px; }
 }
 @media (max-width: 360px) {
   .topbar { gap: 4px; }
@@ -206,3 +240,8 @@ h2 { margin: 0; font-size: 1.15rem; }
 :root[data-theme="dark"] .error { color: #ffb3af; background: #512d2d; }
 :root[data-theme="dark"] .trash-countdown { color: #bcbdbd; }
 :root[data-theme="dark"] .close { color: #eeeae0; }
+:root[data-theme="dark"] .bulk-toolbar { background: #26282b; border-color: #55595d; }
+:root[data-theme="dark"] .list-tools button, :root[data-theme="dark"] .bulk-toolbar button, :root[data-theme="dark"] .card-select:not([aria-pressed="true"]) { background: #303237; border-color: #777a7d; color: #eeeae0; }
+:root[data-theme="dark"] .bulk-toolbar .bulk-danger { color: #ffaaaa; }
+:root[data-theme="dark"] .bulk-result { color: #bcbdbd; }
+:root[data-theme="dark"] .card.selected-card { outline-color: #f4c84c; }

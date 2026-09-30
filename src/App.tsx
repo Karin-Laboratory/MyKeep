@@ -16,7 +16,9 @@ type ImportCounts = { done: number; total: number; success: number; failed: numb
 type ImportProgress = { notes: ImportCounts & { trashed: number }; attachments: ImportCounts };
 type NoteDraft = NoteInput & { checklist: ChecklistInput[] };
 type PendingImage = { id: string; file: File; previewUrl: string };
-type UndoAction = { message: string; undo: () => Promise<void> };
+type UndoAction = { message: string; undo?: () => Promise<void> };
+type BulkOperation = "archive" | "unarchive" | "trash" | "restore" | "permanent" | "addLabels" | "removeLabel";
+type BulkResult = { message: string; failed: number };
 
 const emptyNote: NoteDraft = { title: "", body: "", url: "", pinned: false, archived: false, color: "default", checklist: [] };
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -117,6 +119,13 @@ export default function App() {
   const [undoAction, setUndoAction] = useState<UndoAction | null>(null);
   const [undoing, setUndoing] = useState(false);
   const undoingRef = useRef(false);
+  const [selecting, setSelecting] = useState(false);
+  const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(() => new Set());
+  const [bulkLabelsOpen, setBulkLabelsOpen] = useState(false);
+  const [bulkLabels, setBulkLabels] = useState<string[]>([]);
+  const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
+  const bulkWorkingRef = useRef(false);
+  const preservedLabelFilterRef = useRef("");
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -190,6 +199,19 @@ export default function App() {
   }, []);
 
   useEffect(() => { notesRef.current = notes; }, [notes]);
+  useEffect(() => {
+    setSelectedNoteIds(new Set());
+    setSelecting(false);
+    setBulkLabelsOpen(false);
+    preservedLabelFilterRef.current = "";
+  }, [view, search, labelFilter]);
+  useEffect(() => {
+    const loaded = new Set(notes.map((note) => note.id));
+    setSelectedNoteIds((current) => {
+      const remaining = new Set([...current].filter((id) => loaded.has(id)));
+      return remaining.size === current.size ? current : remaining;
+    });
+  }, [notes]);
   useEffect(() => { pendingImagesRef.current = pendingImages; }, [pendingImages]);
   useEffect(() => () => { pendingImagesRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl)); }, []);
 
@@ -245,7 +267,8 @@ export default function App() {
     api<{ labels: string[] }>("/api/labels")
       .then((data) => {
         setAvailableLabels(data.labels);
-        setLabelFilter((current) => current && !data.labels.includes(current) ? "" : current);
+        setLabelFilter((current) => current && !data.labels.includes(current)
+          && current !== preservedLabelFilterRef.current ? "" : current);
       })
       .catch(() => setAvailableLabels([]));
   }, [reload]);
@@ -254,11 +277,11 @@ export default function App() {
     let active = true;
     let checking = false;
     async function checkForNewNotes() {
-      if (document.visibilityState !== "visible" || refreshingRef.current || checking) return;
+      if (document.visibilityState !== "visible" || refreshingRef.current || bulkWorkingRef.current || checking) return;
       checking = true;
       try {
         const data = await api<NoteList>(listPath(view, search, labelFilter, 0));
-        if (active && firstPageChanged(notesRef.current, data)) setReload((value) => value + 1);
+        if (active && !bulkWorkingRef.current && firstPageChanged(notesRef.current, data)) setReload((value) => value + 1);
       } catch { /* 自動確認の失敗は表示中の一覧に影響させない。 */ }
       finally { checking = false; }
     }
@@ -538,7 +561,7 @@ export default function App() {
   }
 
   async function undoLastAction() {
-    if (!undoAction || working || undoingRef.current) return;
+    if (!undoAction?.undo || working || undoingRef.current) return;
     undoingRef.current = true;
     setUndoing(true);
     setWorking(true);
@@ -554,6 +577,118 @@ export default function App() {
       setUndoing(false);
       setWorking(false);
     }
+  }
+
+  function endSelection() {
+    setSelecting(false);
+    setSelectedNoteIds(new Set());
+    setBulkLabelsOpen(false);
+  }
+
+  function toggleNoteSelection(id: string) {
+    if (working) return;
+    setSelectedNoteIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function runBulk(operation: BulkOperation, labels: string[] = []) {
+    const ids = notes.filter((note) => selectedNoteIds.has(note.id)).map((note) => note.id);
+    if (!ids.length || working || bulkWorkingRef.current) return;
+    if (operation === "permanent" && !window.confirm(`選択した${ids.length}件を完全に削除しますか？\nこの操作は元に戻せません。`)) return;
+    const removedLabel = labelFilter;
+    const messages: Record<BulkOperation, string> = {
+      archive: "アーカイブしました。", unarchive: "メモに戻しました。", trash: "ゴミ箱に移動しました。",
+      restore: "復元しました。", permanent: "完全削除しました。", addLabels: "ラベルを追加しました。",
+      removeLabel: `「${removedLabel}」を外しました。`,
+    };
+    bulkWorkingRef.current = true;
+    setWorking(true);
+    setError("");
+    setBulkResult(null);
+    setUndoAction(null);
+    const succeeded: Note[] = [];
+    let failed = 0;
+    const failures: string[] = [];
+    try {
+      if (operation === "addLabels") {
+        const { labels: existing } = await api<{ labels: string[] }>("/api/labels");
+        if (!labels.length || labels.some((label) => !existing.some((name) => labelKey(name) === labelKey(label)))) {
+          throw new Error("追加する既存ラベルを選び直してください。");
+        }
+      }
+      if (labelFilter) preservedLabelFilterRef.current = labelFilter;
+      for (const id of ids) {
+        try {
+          const { note } = await api<{ note: Note }>(`/api/notes/${id}`);
+          if (operation === "trash" || operation === "permanent") {
+            await api(`/api/notes/${id}${operation === "permanent" ? "/permanent" : ""}`, { method: "DELETE" });
+          } else if (operation === "restore") {
+            await api(`/api/notes/${id}/restore`, { method: "POST" });
+          } else {
+            let changes: { archived: boolean } | { labels: string[] };
+            if (operation === "archive" || operation === "unarchive") {
+              changes = { archived: operation === "archive" };
+            } else if (operation === "removeLabel") {
+              changes = { labels: note.labels.filter((label) => labelKey(label) !== labelKey(removedLabel)) };
+            } else {
+              const merged = [...note.labels];
+              for (const label of labels) {
+                if (!merged.some((name) => labelKey(name) === labelKey(label))) merged.push(label);
+              }
+              if (merged.length > 50) throw new Error("1メモのラベルは50件までです。");
+              changes = { labels: merged };
+            }
+            await api(`/api/notes/${id}`, { method: "PATCH", body: JSON.stringify(changes) });
+          }
+          succeeded.push(note);
+        } catch (cause) {
+          failed++;
+          if (failures.length < 3) failures.push(cause instanceof Error ? cause.message : "処理に失敗しました。");
+        }
+      }
+    } catch (cause) {
+      failed = ids.length;
+      failures.push(cause instanceof Error ? cause.message : "処理に失敗しました。");
+    } finally {
+      bulkWorkingRef.current = false;
+      setWorking(false);
+    }
+    const particle = operation === "addLabels" ? "件に" : operation === "removeLabel" ? "件から" : "件を";
+    const message = `${succeeded.length}${particle}${messages[operation]}`;
+    setBulkResult({ message: `成功 ${succeeded.length}件 / 失敗 ${failed}件${failed ? `：${[...new Set(failures)].join("、")}` : ""}`, failed });
+    endSelection();
+    setReload((value) => value + 1);
+    if (!succeeded.length) return;
+    setUndoAction(operation === "permanent" ? { message } : {
+      message,
+      undo: async () => {
+        bulkWorkingRef.current = true;
+        let undone = 0;
+        let undoFailed = 0;
+        try {
+          for (const note of succeeded) {
+            try {
+              if (operation === "trash") {
+                await api(`/api/notes/${note.id}/restore`, { method: "POST" });
+                await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify({ archived: note.archived }) });
+              } else if (operation === "restore") {
+                await api(`/api/notes/${note.id}`, { method: "DELETE", body: JSON.stringify({ deleted_at: note.deleted_at }) });
+              } else {
+                await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify(
+                  operation === "archive" || operation === "unarchive" ? { archived: note.archived } : { labels: note.labels },
+                ) });
+              }
+              undone++;
+            } catch { undoFailed++; }
+          }
+        } finally { bulkWorkingRef.current = false; }
+        setBulkResult({ message: `取り消し成功 ${undone}件 / 失敗 ${undoFailed}件`, failed: undoFailed });
+      },
+    });
   }
 
   async function remove() {
@@ -786,13 +921,19 @@ export default function App() {
   function renderNoteCard(note: Note) {
     const visiblePreview = richLinkPreview ? mergeLinkPreview(note, previews[note.url]) : null;
     const remainingDays = view === "trash" ? trashRemainingDays(note.deleted_at) : null;
+    const selected = selectedNoteIds.has(note.id);
     return (
-      <article className="card" data-color={note.color} key={note.id}>
-        {view === "trash"
+      <article className={`card${selected ? " selected-card" : ""}`} data-color={note.color} key={note.id}
+        onClick={selecting ? () => toggleNoteSelection(note.id) : undefined}>
+        {selecting && <button type="button" className="card-select" aria-label={`${note.title || "無題のメモ"}${selected ? "の選択を解除" : "を選択"}`}
+          aria-pressed={selected} disabled={working} onClick={(event) => { event.stopPropagation(); toggleNoteSelection(note.id); }}>{selected ? "✓" : ""}</button>}
+        {view === "trash" || selecting
           ? <div className="card-content">{notePreview(note)}</div>
           : <button className="card-content" onClick={() => openEditor(note)} aria-label={`${note.title || "無題のメモ"}を編集`}>{notePreview(note)}</button>}
         {note.url && (visiblePreview
-          ? <a className="link-preview" href={note.url} target="_blank" rel="noopener noreferrer">
+          ? <a className="link-preview" href={note.url} target="_blank" rel="noopener noreferrer"
+              tabIndex={selecting ? -1 : undefined} onClick={selecting ? (event) => event.preventDefault() : undefined}
+              onAuxClick={selecting ? (event) => event.preventDefault() : undefined}>
               {visiblePreview.image && !note.attachments.some((attachment) => IMAGE_TYPES.includes(attachment.mime_type))
                 && <img src={visiblePreview.image} alt="" loading="lazy" referrerPolicy="no-referrer" />}
               <span className="link-preview-details">
@@ -801,11 +942,13 @@ export default function App() {
                 {visiblePreview.description && <span>{visiblePreview.description}</span>}
               </span>
             </a>
-          : <a className="note-link" href={note.url} target="_blank" rel="noopener noreferrer">{note.url}</a>)}
+          : <a className="note-link" href={note.url} target="_blank" rel="noopener noreferrer"
+              tabIndex={selecting ? -1 : undefined} onClick={selecting ? (event) => event.preventDefault() : undefined}
+              onAuxClick={selecting ? (event) => event.preventDefault() : undefined}>{note.url}</a>)}
         {remainingDays !== null && <p className="trash-countdown">
           {remainingDays > 0 ? `完全削除まで あと${remainingDays}日` : "まもなく完全削除"}
         </p>}
-        <div className="card-actions">
+        {!selecting && <div className="card-actions">
           {view === "trash" ? <>
             <button disabled={working} onClick={() => restore(note)}>復元</button>
             <button className="danger" disabled={working} onClick={() => permanentlyRemove(note)}>完全削除</button>
@@ -814,13 +957,13 @@ export default function App() {
             <button disabled={working} onClick={() => updateFlag(note, "archived")}>{note.archived ? "戻す" : "アーカイブ"}</button>
             {view === "archived" && <button className="trash-action" disabled={working} onClick={() => moveCardToTrash(note)}>ゴミ箱</button>}
           </>}
-        </div>
+        </div>}
       </article>
     );
   }
 
   return (
-    <main className="app">
+    <main className={`app${selecting ? " selecting" : ""}`}>
       <header className="topbar">
         <div className="brand">
           <button type="button" className="menu-toggle" aria-label="メニューを開く" aria-controls="sidebar" aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}>☰</button>
@@ -861,6 +1004,10 @@ export default function App() {
           </div>
         </aside>
         <div className="main-content">
+      <div className="list-tools">
+        {!selecting && <button type="button" disabled={working || loading} onClick={() => { setSelecting(true); setBulkResult(null); }}>選択</button>}
+      </div>
+      {bulkResult && <p className={bulkResult.failed ? "error" : "bulk-result"} role={bulkResult.failed ? "alert" : "status"}>{bulkResult.message}</p>}
       {error && !draft && <p className="error" role="alert">{error}</p>}
       {!loading && notes.length === 0 && <p className="empty">{search.trim() || labelFilter ? "該当するメモはありません。" : view === "active" ? "メモはまだありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}
 
@@ -877,9 +1024,45 @@ export default function App() {
         </div>
       </div>
 
+      {selecting && <section className="bulk-toolbar" aria-label="一括操作">
+        <div className="bulk-selection-controls">
+          <strong aria-live="polite">{selectedNoteIds.size}件選択</strong>
+          <button type="button" disabled={working || loading} onClick={() => setSelectedNoteIds(new Set(notes.map((note) => note.id)))}>全選択</button>
+          <button type="button" disabled={working || !selectedNoteIds.size} onClick={() => setSelectedNoteIds(new Set())}>全解除</button>
+          <button type="button" disabled={working} onClick={endSelection}>終了</button>
+        </div>
+        <div className="bulk-operation-controls">
+          {view === "trash" ? <>
+            <button type="button" disabled={working || !selectedNoteIds.size} onClick={() => void runBulk("restore")}>復元</button>
+            <button type="button" className="bulk-danger" disabled={working || !selectedNoteIds.size} onClick={() => void runBulk("permanent")}>完全削除</button>
+          </> : <>
+            {view === "active" && labelFilter && <button type="button" disabled={working || !selectedNoteIds.size} onClick={() => void runBulk("removeLabel")}>このラベルを外す</button>}
+            <button type="button" disabled={working || !selectedNoteIds.size} onClick={() => void runBulk(view === "archived" ? "unarchive" : "archive")}>{view === "archived" ? "メモに戻す" : "アーカイブ"}</button>
+            <button type="button" disabled={working || !selectedNoteIds.size} onClick={() => { setBulkLabels([]); setBulkLabelsOpen(true); }}>{labelFilter ? "他のラベルを付ける" : "ラベル"}</button>
+            <button type="button" className="bulk-danger" disabled={working || !selectedNoteIds.size} onClick={() => void runBulk("trash")}>ゴミ箱</button>
+          </>}
+          {working && <span role="status">処理中…</span>}
+        </div>
+      </section>}
+
       {undoAction && <div className="snackbar" role="status" aria-atomic="true">
         <span>{undoAction.message}</span>
-        <button type="button" disabled={working || undoing} onClick={() => void undoLastAction()}>取り消す</button>
+        {undoAction.undo && <button type="button" disabled={working || undoing} onClick={() => void undoLastAction()}>取り消す</button>}
+      </div>}
+
+      {bulkLabelsOpen && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !working) setBulkLabelsOpen(false); }}>
+        <section className="utility-modal" role="dialog" aria-modal="true" aria-label="一括ラベル追加">
+          <div className="editor-heading"><h2>ラベルを追加</h2><button type="button" className="close" aria-label="閉じる" disabled={working} onClick={() => setBulkLabelsOpen(false)}>×</button></div>
+          <div className="label-manager-list">
+            {availableLabels.map((name) => <label key={name}><input type="checkbox" checked={bulkLabels.includes(name)} disabled={working || (!bulkLabels.includes(name) && bulkLabels.length >= 50)}
+              onChange={() => setBulkLabels((current) => current.includes(name) ? current.filter((label) => label !== name) : [...current, name])} />{name}</label>)}
+          </div>
+          {!availableLabels.length && <p>登録済みラベルはありません。</p>}
+          <div className="label-manager-actions">
+            <button type="button" className="label-cancel-button" disabled={working} onClick={() => setBulkLabelsOpen(false)}>キャンセル</button>
+            <button type="button" className="primary" disabled={working || !bulkLabels.length || !selectedNoteIds.size} onClick={() => void runBulk("addLabels", bulkLabels)}>適用</button>
+          </div>
+        </section>
       </div>}
 
       {settingsOpen && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
