@@ -7,7 +7,7 @@ const status = document.getElementById("status");
 const repairProgress = document.getElementById("repairProgress");
 const repairStatus = document.getElementById("repairStatus");
 const repairCount = document.getElementById("repairCount");
-const repairButtons = Object.fromEntries(["Check", "Start", "Pause", "Resume", "Cancel", "Retry"]
+const repairButtons = Object.fromEntries(["Check", "Start", "Pause", "Resume", "Cancel", "Retry", "Clear"]
   .map(name => [name.toLowerCase(), document.getElementById(`repair${name}`)]));
 let repairState = { status: "idle", failures: [] };
 let repairRequestPending = false;
@@ -53,6 +53,7 @@ function renderRepair() {
   repairButtons.retry.hidden = running || paused || !repairState.failures?.length;
   repairButtons.start.hidden = running || paused;
   for (const button of Object.values(repairButtons)) button.disabled = repairRequestPending || !configured;
+  repairButtons.clear.disabled = repairRequestPending || running || paused || finishing;
   repairButtons.start.disabled ||= finishing;
   repairButtons.resume.disabled ||= finishing;
   repairButtons.retry.disabled ||= finishing;
@@ -77,6 +78,7 @@ async function repairCommand(action) {
     const result = await chrome.runtime.sendMessage({ type: "thumbnail-repair", action });
     if (!result?.ok) throw new Error(result?.error || "処理を開始できませんでした。");
     if (result.state) repairState = result.state;
+    if (action === "clear") repairCount.textContent = "未取得件数：未確認";
     if (Number.isSafeInteger(result.count)) repairCount.textContent = `未取得件数：${result.count}件`;
     repairRequestPending = false;
     renderRepair();
@@ -89,12 +91,15 @@ async function repairCommand(action) {
 }
 
 repairButtons.check.addEventListener("click", () => void repairCommand("count"));
-for (const action of ["start", "pause", "resume", "cancel", "retry"]) {
+for (const action of ["start", "pause", "resume", "cancel", "retry", "clear"]) {
   repairButtons[action].addEventListener("click", () => void repairCommand(action));
 }
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.thumbnailRepairState) repairState = changes.thumbnailRepairState.newValue ?? { status: "idle", failures: [] };
+  if (changes.thumbnailRepairState) {
+    repairState = changes.thumbnailRepairState.newValue ?? { status: "idle", failures: [] };
+    if (repairState.status === "idle") repairCount.textContent = "未取得件数：未確認";
+  }
   if (changes.apiUrl || changes.apiKey) {
     void chrome.storage.local.get(["apiUrl", "apiKey"]).then(config => {
       configured = Boolean(config.apiUrl && config.apiKey); renderRepair();

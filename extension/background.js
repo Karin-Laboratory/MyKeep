@@ -273,6 +273,21 @@ async function step() {
 async function command(action) {
   await ready;
   if (action === "state") return { state };
+  if (action === "clear") {
+    if (busy || state.status === "running" || state.currentNoteId) {
+      throw new Error("処理中は結果をクリアできません。現在の1件が終了するまでお待ちください。");
+    }
+    if (state.status === "paused") throw new Error("中止してから結果をクリアしてください。");
+    await disarm();
+    await closeOwnedTab();
+    metadataCache.clear();
+    page = [];
+    state = emptyState();
+    session = { runId: null, tabId: null };
+    await saveSession();
+    await persist();
+    return { state };
+  }
   if (action === "count") {
     const result = await api({ mode: "missing-preview-count" });
     if (!Number.isSafeInteger(result.count) || result.count < 0) throw new Error("未取得件数を確認できません。");
