@@ -65,10 +65,11 @@ function listPath(view: View, search: string, label: string, offset: number): st
   return `/api/notes?${params}`;
 }
 
-function notePreview(note: Note) {
+function notePreview(note: Note, showArchive = false) {
   const imageAttachments = note.attachments.filter((item) => IMAGE_TYPES.includes(item.mime_type));
   return <>
     {note.pinned && <span className="pin-label">📌 ピン留め</span>}
+    {showArchive && note.archived && <span className="pin-label">📦 アーカイブ</span>}
     {note.title && <strong>{note.title}</strong>}
     {note.body && <span className="body-preview">{note.body}</span>}
     {note.checklist.length > 0 && <span className="checklist-preview">
@@ -596,7 +597,9 @@ export default function App() {
   }
 
   async function runBulk(operation: BulkOperation, labels: string[] = []) {
-    const ids = notes.filter((note) => selectedNoteIds.has(note.id)).map((note) => note.id);
+    const ids = notes.filter((note) => selectedNoteIds.has(note.id)
+      && (operation !== "archive" || !note.archived)
+      && (operation !== "unarchive" || note.archived)).map((note) => note.id);
     if (!ids.length || working || bulkWorkingRef.current) return;
     if (operation === "permanent" && !window.confirm(`選択した${ids.length}件を完全に削除しますか？\nこの操作は元に戻せません。`)) return;
     const removedLabel = labelFilter;
@@ -624,6 +627,7 @@ export default function App() {
       for (const id of ids) {
         try {
           const { note } = await api<{ note: Note }>(`/api/notes/${id}`);
+          if ((operation === "archive" && note.archived) || (operation === "unarchive" && !note.archived)) continue;
           if (operation === "trash" || operation === "permanent") {
             await api(`/api/notes/${id}${operation === "permanent" ? "/permanent" : ""}`, { method: "DELETE" });
           } else if (operation === "restore") {
@@ -917,6 +921,8 @@ export default function App() {
   const deleteLabelNames = availableLabels.filter((name) => labelsToDelete.includes(labelKey(name)));
   const pinnedNotes = notes.filter((note) => note.pinned);
   const otherNotes = notes.filter((note) => !note.pinned);
+  const selectedActiveCount = notes.filter((note) => selectedNoteIds.has(note.id) && !note.archived).length;
+  const selectedArchivedCount = notes.filter((note) => selectedNoteIds.has(note.id) && note.archived).length;
 
   function renderNoteCard(note: Note) {
     const visiblePreview = richLinkPreview ? mergeLinkPreview(note, previews[note.url]) : null;
@@ -928,8 +934,8 @@ export default function App() {
         {selecting && <button type="button" className="card-select" aria-label={`${note.title || "無題のメモ"}${selected ? "の選択を解除" : "を選択"}`}
           aria-pressed={selected} disabled={working} onClick={(event) => { event.stopPropagation(); toggleNoteSelection(note.id); }}>{selected ? "✓" : ""}</button>}
         {view === "trash" || selecting
-          ? <div className="card-content">{notePreview(note)}</div>
-          : <button className="card-content" onClick={() => openEditor(note)} aria-label={`${note.title || "無題のメモ"}を編集`}>{notePreview(note)}</button>}
+          ? <div className="card-content">{notePreview(note, Boolean(labelFilter))}</div>
+          : <button className="card-content" onClick={() => openEditor(note)} aria-label={`${note.title || "無題のメモ"}を編集`}>{notePreview(note, Boolean(labelFilter))}</button>}
         {note.url && (visiblePreview
           ? <a className="link-preview" href={note.url} target="_blank" rel="noopener noreferrer"
               tabIndex={selecting ? -1 : undefined} onClick={selecting ? (event) => event.preventDefault() : undefined}
@@ -955,7 +961,7 @@ export default function App() {
           </> : <>
             <button disabled={working} onClick={() => updateFlag(note, "pinned")}>{note.pinned ? "ピン解除" : "ピン留め"}</button>
             <button disabled={working} onClick={() => updateFlag(note, "archived")}>{note.archived ? "戻す" : "アーカイブ"}</button>
-            {view === "archived" && <button className="trash-action" disabled={working} onClick={() => moveCardToTrash(note)}>ゴミ箱</button>}
+            {note.archived && <button className="trash-action" disabled={working} onClick={() => moveCardToTrash(note)}>ゴミ箱</button>}
           </>}
         </div>}
       </article>
@@ -1037,7 +1043,10 @@ export default function App() {
             <button type="button" className="bulk-danger" disabled={working || !selectedNoteIds.size} onClick={() => void runBulk("permanent")}>完全削除</button>
           </> : <>
             {view === "active" && labelFilter && <button type="button" disabled={working || !selectedNoteIds.size} onClick={() => void runBulk("removeLabel")}>このラベルを外す</button>}
-            <button type="button" disabled={working || !selectedNoteIds.size} onClick={() => void runBulk(view === "archived" ? "unarchive" : "archive")}>{view === "archived" ? "メモに戻す" : "アーカイブ"}</button>
+            {labelFilter ? <>
+              <button type="button" disabled={working || !selectedActiveCount} onClick={() => void runBulk("archive")}>アーカイブ</button>
+              <button type="button" disabled={working || !selectedArchivedCount} onClick={() => void runBulk("unarchive")}>メモに戻す</button>
+            </> : <button type="button" disabled={working || !selectedNoteIds.size} onClick={() => void runBulk(view === "archived" ? "unarchive" : "archive")}>{view === "archived" ? "メモに戻す" : "アーカイブ"}</button>}
             <button type="button" disabled={working || !selectedNoteIds.size} onClick={() => { setBulkLabels([]); setBulkLabelsOpen(true); }}>{labelFilter ? "他のラベルを付ける" : "ラベル"}</button>
             <button type="button" className="bulk-danger" disabled={working || !selectedNoteIds.size} onClick={() => void runBulk("trash")}>ゴミ箱</button>
           </>}

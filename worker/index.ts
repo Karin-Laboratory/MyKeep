@@ -240,8 +240,9 @@ async function listNotes(request: Request, env: Env): Promise<Response> {
     return json({ error: "一覧の指定が正しくありません。" }, 400);
   }
 
-  const conditions = view === "trash" ? ["deleted_at IS NOT NULL"] : ["deleted_at IS NULL", "archived = ?"];
-  const bindings: (string | number)[] = view === "trash" ? [] : [view === "archived" ? 1 : 0];
+  const conditions = view === "trash" ? ["deleted_at IS NOT NULL"]
+    : label ? ["deleted_at IS NULL"] : ["deleted_at IS NULL", "archived = ?"];
+  const bindings: (string | number)[] = view === "trash" || label ? [] : [view === "archived" ? 1 : 0];
   if (query) {
     conditions.push("(instr(lower(title), lower(?)) > 0 OR instr(lower(body), lower(?)) > 0 OR instr(lower(url), lower(?)) > 0)");
     bindings.push(query, query, query);
@@ -386,8 +387,12 @@ async function moveToTrash(id: string, request: Request, env: Env): Promise<Resp
   const now = new Date().toISOString();
   let deletedAt = now;
   // 復元のUndoでは元のゴミ箱日時を戻し、30日の削除期限を維持する。
-  if (request.body !== null) {
-    const input = await readInput(request);
+  const bytes = request.body ? await readBytes(request, MAX_REQUEST_BYTES) : new Uint8Array();
+  if (bytes.byteLength > 0) {
+    let input: unknown;
+    try {
+      input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    } catch { throw new Error("invalid_json"); }
     if (!input || typeof input !== "object" || Array.isArray(input)) return json({ error: "ゴミ箱日時を確認してください。" }, 400);
     const value = (input as Record<string, unknown>).deleted_at;
     const timestamp = typeof value === "string" ? Date.parse(value) : NaN;
