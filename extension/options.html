@@ -15,5 +15,23 @@
       <p id="status" role="status" aria-live="polite"></p>
       <button type="submit" class="primary">設定を保存</button>
     </form>
+    <section class="repair-section" aria-labelledby="repairTitle">
+      <h2 id="repairTitle">サムネイル補完</h2>
+      <p>画像がないメモのURLをChromeで1件ずつ開いて補完します。通常メモとアーカイブが対象です。</p>
+      <p>開始時にサイトへのアクセス許可を確認します。設定画面を閉じても処理は続きます。</p>
+      <p id="repairCount">未取得件数：未確認</p>
+      <div class="repair-actions">
+        <button id="repairCheck" class="secondary" type="button">未取得件数を確認</button>
+        <button id="repairStart" class="primary" type="button">サムネイル補完を開始</button>
+      </div>
+      <p id="repairProgress" role="status" aria-live="polite"></p>
+      <div class="repair-actions">
+        <button id="repairPause" class="secondary" type="button" hidden>一時停止</button>
+        <button id="repairResume" class="primary" type="button" hidden>続きから再開</button>
+        <button id="repairCancel" class="secondary" type="button" hidden>中止</button>
+        <button id="repairRetry" class="secondary" type="button" hidden>失敗分だけ再試行</button>
+      </div>
+      <p id="repairStatus" role="status" aria-live="polite"></p>
+    </section>
   </body>
 </html>

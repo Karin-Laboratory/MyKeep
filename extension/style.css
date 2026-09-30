@@ -43,3 +43,8 @@ button:disabled { cursor: default; opacity: .55; }
 [hidden] { display: none !important; }
 #status { min-height: 1em; margin: 0; font-size: .82rem; color: #286138; }
 #status.error { color: #a52f2f; }
+.repair-section { margin-top: 28px; padding-top: 18px; border-top: 1px solid #cecec8; }
+.repair-section h2 { margin: 0 0 12px; font-size: 1rem; }
+.repair-section p { font-size: .85rem; line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
+.repair-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+#repairStatus.error { color: #a52f2f; }

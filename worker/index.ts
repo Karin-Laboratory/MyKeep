@@ -15,6 +15,12 @@ interface NoteRow extends NotePreview {
   updated_at: string;
 }
 
+interface MissingPreviewRow {
+  id: string;
+  url: string;
+  preview_image: string;
+}
+
 interface AttachmentRow {
   id: string;
   note_id: string;
@@ -49,6 +55,10 @@ const MAX_CAPTURE_BYTES = MAX_IMAGE_BYTES + 1024 * 1024;
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
 const MIME_TYPE_PATTERN = /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/;
 const COLOR_SET = new Set<string>(NOTE_COLORS);
+const PREVIEW_LIMITS = { preview_title: 300, preview_description: 500, preview_image: 2000, preview_hostname: 255 } as const;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MISSING_PREVIEW_SCAN_SIZE = 200;
+const FILL_PREVIEW_FIELDS = new Set(["mode", "note_id", "source_url", "preview_title", "preview_description", "preview_image", "preview_hostname"]);
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
@@ -74,6 +84,19 @@ function toAttachment(row: AttachmentRow): Attachment {
 
 function validFilename(filename: string): boolean {
   return !!filename && filename.length <= 255 && !/[\x00-\x1f\x7f]/.test(filename);
+}
+
+function isStrictUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return (parsed.protocol === "http:" || parsed.protocol === "https:") && !!parsed.hostname;
+  } catch {
+    return false;
+  }
 }
 
 async function matchesApiKey(header: string | null, secret: string): Promise<boolean> {
@@ -180,10 +203,9 @@ function parseInput(value: unknown, current?: NoteRow, allowEmpty = false): Note
     }
   }
   const preview: NotePreview = { preview_title: "", preview_description: "", preview_image: "", preview_hostname: "" };
-  const limits = { preview_title: 300, preview_description: 500, preview_image: 2000, preview_hostname: 255 };
-  for (const field of Object.keys(limits) as Array<keyof NotePreview>) {
+  for (const field of Object.keys(PREVIEW_LIMITS) as Array<keyof NotePreview>) {
     const value = input[field] === undefined ? current?.[field] ?? "" : input[field];
-    if (typeof value !== "string" || value.length > limits[field]) return null;
+    if (typeof value !== "string" || value.length > PREVIEW_LIMITS[field]) return null;
     preview[field] = value.trim();
   }
   if (preview.preview_image) {
@@ -518,14 +540,157 @@ async function uploadAttachment(noteId: string, request: Request, env: Env): Pro
   return json({ attachment: await persistAttachment(noteId, filename, mime, bytes, env) }, 201);
 }
 
+function missingPreviewSql(): string {
+  return "deleted_at IS NULL AND preview_image = '' AND (url LIKE 'http://%' OR url LIKE 'https://%')";
+}
+
+async function missingPreviewCount(env: Env): Promise<Response> {
+  let count = 0;
+  let cursor = "";
+  while (true) {
+    const result = await env.DB.prepare(
+      `SELECT id, url FROM notes WHERE ${missingPreviewSql()} AND id > ? ORDER BY id LIMIT ?`,
+    ).bind(cursor, MISSING_PREVIEW_SCAN_SIZE).all<{ id: string; url: string }>();
+    const rows = result.results ?? [];
+    count += rows.filter((row) => isValidHttpUrl(row.url)).length;
+    if (rows.length < MISSING_PREVIEW_SCAN_SIZE) break;
+    cursor = rows[rows.length - 1].id;
+  }
+  return json({ count });
+}
+
+function missingPreviewLimit(value: string | null): number | null {
+  if (value === null) return PAGE_SIZE;
+  const limit = Number(value);
+  return Number.isSafeInteger(limit) && limit >= 1 && limit <= PAGE_SIZE ? limit : null;
+}
+
+async function missingPreviews(request: Request, env: Env): Promise<Response> {
+  const params = new URL(request.url).searchParams;
+  const limit = missingPreviewLimit(params.get("limit"));
+  const cursor = params.get("cursor");
+  if (limit === null || (cursor !== null && !isStrictUuid(cursor))) {
+    return json({ error: "未取得プレビューの指定が正しくありません。" }, 400);
+  }
+
+  // The cursor advances by id only. Rows that become filled while this loop is
+  // running disappear from later pages without shifting an offset.
+  const candidates: MissingPreviewRow[] = [];
+  let scanCursor = cursor ?? "";
+  let exhausted = false;
+  while (candidates.length <= limit && !exhausted) {
+    const result = await env.DB.prepare(
+      `SELECT id, url, preview_image FROM notes WHERE ${missingPreviewSql()} AND id > ? ORDER BY id LIMIT ?`,
+    ).bind(scanCursor, MISSING_PREVIEW_SCAN_SIZE).all<MissingPreviewRow>();
+    const rows = result.results ?? [];
+    if (!rows.length) {
+      exhausted = true;
+      break;
+    }
+    for (const row of rows) {
+      scanCursor = row.id;
+      if (isValidHttpUrl(row.url)) candidates.push(row);
+      if (candidates.length > limit) break;
+    }
+    if (candidates.length > limit) break;
+    exhausted = rows.length < MISSING_PREVIEW_SCAN_SIZE;
+  }
+
+  const page = candidates.slice(0, limit);
+  return json({
+    notes: page.map((row) => ({ id: row.id, url: row.url, preview_image: row.preview_image })),
+    next_cursor: page.length ? page[page.length - 1].id : null,
+    has_more: candidates.length > limit,
+  });
+}
+
+async function fillPreview(request: Request, env: Env): Promise<Response> {
+  const value = await readInput(request);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return json({ error: "プレビューの内容を確認してください。" }, 400);
+  }
+  const input = value as Record<string, unknown>;
+  if (Object.keys(input).some((key) => !FILL_PREVIEW_FIELDS.has(key))
+    || input.mode !== "fill-preview" || !isStrictUuid(input.note_id)) {
+    return json({ error: "プレビューの指定が正しくありません。" }, 400);
+  }
+
+  const preview: NotePreview = {
+    preview_title: "",
+    preview_description: "",
+    preview_image: "",
+    preview_hostname: "",
+  };
+  for (const field of Object.keys(PREVIEW_LIMITS) as Array<keyof NotePreview>) {
+    const raw = input[field];
+    if (raw === undefined) continue;
+    if (typeof raw !== "string" || raw.length > PREVIEW_LIMITS[field]) {
+      return json({ error: "プレビューの内容を確認してください。" }, 400);
+    }
+    preview[field] = raw.trim();
+  }
+  if (!preview.preview_image || !isValidHttpUrl(preview.preview_image)) {
+    return json({ error: "プレビュー画像URLを確認してください。" }, 400);
+  }
+
+  let sourceUrl: string | undefined;
+  if (input.source_url !== undefined) {
+    if (typeof input.source_url !== "string" || input.source_url.length > 2_000 || !isValidHttpUrl(input.source_url)) {
+      return json({ error: "元URLを確認してください。" }, 400);
+    }
+    sourceUrl = input.source_url;
+  }
+
+  const noteId = input.note_id;
+  const current = await env.DB.prepare("SELECT id, url, deleted_at FROM notes WHERE id = ?")
+    .bind(noteId).first<{ id: string; url: string; deleted_at: string | null }>();
+  if (!current || current.deleted_at !== null) {
+    return json({ error: "対象メモが見つからないか、ゴミ箱にあります。" }, 409);
+  }
+  if (sourceUrl !== undefined && sourceUrl !== current.url) {
+    return json({ error: "メモのURLが変更されています。" }, 409);
+  }
+
+  const updateSql = `UPDATE notes SET
+    preview_title = CASE WHEN preview_title = '' AND ? <> '' THEN ? ELSE preview_title END,
+    preview_description = CASE WHEN preview_description = '' AND ? <> '' THEN ? ELSE preview_description END,
+    preview_image = CASE WHEN preview_image = '' AND ? <> '' THEN ? ELSE preview_image END,
+    preview_hostname = CASE WHEN preview_hostname = '' AND ? <> '' THEN ? ELSE preview_hostname END
+    WHERE id = ? AND deleted_at IS NULL${sourceUrl === undefined ? "" : " AND url = ?"}`;
+  const bindings: string[] = [
+    preview.preview_title, preview.preview_title,
+    preview.preview_description, preview.preview_description,
+    preview.preview_image, preview.preview_image,
+    preview.preview_hostname, preview.preview_hostname,
+    noteId,
+  ];
+  if (sourceUrl !== undefined) bindings.push(sourceUrl);
+  const result = await env.DB.prepare(updateSql).bind(...bindings).run();
+  if (result.meta.changes === 0) {
+    const after = await env.DB.prepare("SELECT id, url, deleted_at FROM notes WHERE id = ?")
+      .bind(noteId).first<{ id: string; url: string; deleted_at: string | null }>();
+    if (!after || after.deleted_at !== null || (sourceUrl !== undefined && after.url !== sourceUrl)) {
+      return json({ error: "対象メモが見つからないか、URLが変更されています。" }, 409);
+    }
+  }
+  return json({ ok: true, note_id: noteId });
+}
+
 async function captureApi(request: Request, env: Env): Promise<Response> {
   const secret = (env as Env & { CAPTURE_API_KEY?: string }).CAPTURE_API_KEY;
   if (!secret) return json({ error: "保存APIが設定されていません。" }, 503);
   if (!await matchesApiKey(request.headers.get("Authorization"), secret)) {
     return json({ error: "API KEYが正しくありません。" }, 401);
   }
-  if (request.method === "GET") return listLabels(env);
+  if (request.method === "GET") {
+    const mode = new URL(request.url).searchParams.get("mode");
+    if (!mode) return listLabels(env);
+    if (mode === "missing-preview-count") return missingPreviewCount(env);
+    if (mode === "missing-previews") return missingPreviews(request, env);
+    return json({ error: "このモードには対応していません。" }, 400);
+  }
   if (request.method === "POST") return captureNote(request, env);
+  if (request.method === "PUT") return fillPreview(request, env);
   return json({ error: "このメソッドには対応していません。" }, 405);
 }
 

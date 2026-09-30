@@ -1,10 +1,12 @@
 {
   "manifest_version": 3,
   "name": "MyKeep Capture",
-  "version": "0.2.1",
+  "version": "0.3.0",
+  "minimum_chrome_version": "120",
   "description": "現在のページをMyKeepに保存します。",
-  "permissions": ["activeTab", "storage", "scripting"],
-  "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "permissions": ["activeTab", "storage", "scripting", "alarms"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
   "action": {
     "default_title": "MyKeepに保存",
     "default_popup": "popup.html",
