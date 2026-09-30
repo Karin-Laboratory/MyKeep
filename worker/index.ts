@@ -326,6 +326,64 @@ async function deleteLabels(request: Request, env: Env): Promise<Response> {
   return json({ deleted: result.results.length });
 }
 
+async function renameLabel(request: Request, env: Env): Promise<Response> {
+  const value = await readInput(request, 20_000);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return json({ error: "ラベル名を確認してください。" }, 400);
+  }
+  const input = value as Record<string, unknown>;
+  if (Object.keys(input).some((key) => key !== "oldName" && key !== "newName")
+    || typeof input.oldName !== "string" || typeof input.newName !== "string") {
+    return json({ error: "ラベル名を確認してください。" }, 400);
+  }
+  const oldName = input.oldName.trim().normalize("NFC");
+  const newName = input.newName.trim().normalize("NFC");
+  if (!oldName || oldName.length > 100 || !newName || newName.length > 100) {
+    return json({ error: "ラベル名は1〜100文字で入力してください。" }, 400);
+  }
+
+  const oldKey = labelKey(oldName);
+  const newKey = labelKey(newName);
+  if (oldKey === newKey) {
+    const result = await env.DB.prepare("UPDATE labels SET name = ? WHERE name_key = ?")
+      .bind(newName, oldKey).run();
+    if (result.meta.changes === 0) return json({ error: "ラベルが見つかりません。" }, 404);
+    return json({ label: newName });
+  }
+
+  const source = await env.DB.prepare("SELECT name_key FROM labels WHERE name_key = ?")
+    .bind(oldKey).first<{ name_key: string }>();
+  if (!source) return json({ error: "ラベルが見つかりません。" }, 404);
+  const target = await env.DB.prepare("SELECT name_key FROM labels WHERE name_key = ?")
+    .bind(newKey).first<{ name_key: string }>();
+  if (target) return json({ error: "変更先のラベルは既に存在します。" }, 409);
+
+  let results: D1Result[];
+  try {
+    results = await env.DB.batch([
+      // Keep the old-label existence check in the transaction. If another
+      // request deletes it before this batch starts, no target row is made.
+      env.DB.prepare(
+        "INSERT INTO labels (name_key, name) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM labels WHERE name_key = ?)",
+      ).bind(newKey, newName, oldKey),
+      env.DB.prepare(
+        "INSERT OR IGNORE INTO note_labels (note_id, label_key) SELECT note_id, ? FROM note_labels WHERE label_key = ?",
+      ).bind(newKey, oldKey),
+      env.DB.prepare("DELETE FROM note_labels WHERE label_key = ?").bind(oldKey),
+      env.DB.prepare("DELETE FROM labels WHERE name_key = ?").bind(oldKey),
+    ]);
+  } catch (error) {
+    if (error instanceof Error && /unique constraint|constraint failed/i.test(error.message)) {
+      return json({ error: "変更先のラベルは既に存在します。" }, 409);
+    }
+    throw error;
+  }
+  if ((results[0]?.meta.changes ?? 0) === 0) {
+    return json({ error: "ラベルが見つかりません。" }, 404);
+  }
+  return json({ label: newName });
+}
+
 async function exportCounts(env: Env): Promise<Response> {
   const counts = await env.DB.prepare(
     "SELECT (SELECT COUNT(*) FROM notes) AS notes, (SELECT COUNT(*) FROM attachments) AS attachments",
@@ -827,6 +885,7 @@ export default {
         if (request.method === "GET") return await listLabels(env);
         if (request.method === "POST") return await createLabel(request, env);
         if (request.method === "DELETE") return await deleteLabels(request, env);
+        if (request.method === "PATCH") return await renameLabel(request, env);
       }
 
       if (url.pathname === "/api/export/counts" && request.method === "GET") {

@@ -166,6 +166,7 @@ export default function App() {
   const [bulkLabelsOpen, setBulkLabelsOpen] = useState(false);
   const [bulkLabels, setBulkLabels] = useState<string[]>([]);
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
+  const labelRenameAliasesRef = useRef(new Map<string, string>());
   const bulkWorkingRef = useRef(false);
   const preservedLabelFilterRef = useRef("");
   const [error, setError] = useState("");
@@ -194,6 +195,11 @@ export default function App() {
   const [deletingLabels, setDeletingLabels] = useState(false);
   const [creatingStandaloneLabel, setCreatingStandaloneLabel] = useState(false);
   const [labelDeleteError, setLabelDeleteError] = useState("");
+  const [editingLabel, setEditingLabel] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState("");
+  const [renamingLabel, setRenamingLabel] = useState(false);
+  const [renameError, setRenameError] = useState("");
+  const renamingLabelRef = useRef(false);
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [richLinkPreview, setRichLinkPreview] = useState(() => savedSetting(PREVIEW_SETTING, true));
@@ -212,6 +218,12 @@ export default function App() {
     const timer = window.setTimeout(() => setUndoAction(null), 5000);
     return () => window.clearTimeout(timer);
   }, [undoAction, undoing]);
+
+  useEffect(() => {
+    if (!bulkResult) return;
+    const timer = window.setTimeout(() => setBulkResult(null), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [bulkResult]);
 
   useEffect(() => {
     const id = deepLinkNoteRef.current;
@@ -460,14 +472,61 @@ export default function App() {
     setLabelsToDelete([]);
     setLabelDeleteConfirm(false);
     setLabelDeleteError("");
+    cancelLabelRename();
   }
 
   function openLabelManager() {
     setLabelsToDelete([]);
     setLabelDeleteConfirm(false);
     setLabelDeleteError("");
+    cancelLabelRename();
     setLabelManagerOpen(true);
     setMenuOpen(false);
+  }
+
+  function cancelLabelRename() {
+    setEditingLabel(null);
+    setRenameName("");
+    setRenameError("");
+  }
+
+  async function renameLabel() {
+    if (!editingLabel || renamingLabelRef.current || deletingLabels || creatingStandaloneLabel || working || undoing) return;
+    const newName = normalizedLabelName(renameName);
+    if (!newName) { setRenameError("ラベル名は1〜100文字で入力してください。"); return; }
+    const oldKey = labelKey(editingLabel);
+    renamingLabelRef.current = true;
+    setRenamingLabel(true);
+    setRenameError("");
+    try {
+      const { label } = await api<{ label: string }>("/api/labels", {
+        method: "PATCH", body: JSON.stringify({ oldName: editingLabel, newName }),
+      });
+      const newKey = labelKey(label);
+      const replaceLabels = (values: string[]) => [...new Map(values.map((name) => {
+        const renamed = [oldKey, newKey].includes(labelKey(name)) ? label : name;
+        return [labelKey(renamed), renamed] as const;
+      })).values()];
+      setAvailableLabels((current) => replaceLabels(current).sort());
+      setSelectedLabels(replaceLabels);
+      setBulkLabels(replaceLabels);
+      setLabelsToDelete((current) => [...new Set(current.map((key) => key === oldKey ? newKey : key))]);
+      setLabelFilter((current) => labelKey(current) === oldKey ? label : current);
+      if (labelKey(preservedLabelFilterRef.current) === oldKey) preservedLabelFilterRef.current = label;
+      setNotes((current) => current.map((note) => ({ ...note, labels: replaceLabels(note.labels) })));
+      // A still-visible bulk Undo must restore the renamed label rather than recreate its old name.
+      for (const [key, name] of labelRenameAliasesRef.current) {
+        if (labelKey(name) === oldKey) labelRenameAliasesRef.current.set(key, label);
+      }
+      labelRenameAliasesRef.current.set(oldKey, label);
+      cancelLabelRename();
+      setReload((value) => value + 1);
+    } catch (cause) {
+      setRenameError(cause instanceof Error ? cause.message : "ラベル名を変更できませんでした。");
+    } finally {
+      renamingLabelRef.current = false;
+      setRenamingLabel(false);
+    }
   }
 
   function toggleLabelToDelete(name: string) {
@@ -666,6 +725,7 @@ export default function App() {
     setError("");
     setBulkResult(null);
     setUndoAction(null);
+    labelRenameAliasesRef.current.clear();
     const succeeded: Note[] = [];
     let failed = 0;
     const failures: string[] = [];
@@ -736,7 +796,8 @@ export default function App() {
                 await api(`/api/notes/${note.id}`, { method: "DELETE", body: JSON.stringify({ deleted_at: note.deleted_at }) });
               } else {
                 await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify(
-                  operation === "archive" || operation === "unarchive" ? { archived: note.archived } : { labels: note.labels },
+                  operation === "archive" || operation === "unarchive" ? { archived: note.archived }
+                    : { labels: note.labels.map((name) => labelRenameAliasesRef.current.get(labelKey(name)) ?? name) },
                 ) });
               }
               undone++;
@@ -972,6 +1033,7 @@ export default function App() {
   const labelOptions = [...availableLabels, ...selectedLabels].filter((name, index, all) =>
     all.findIndex((candidate) => labelKey(candidate) === labelKey(name)) === index);
   const deleteLabelNames = availableLabels.filter((name) => labelsToDelete.includes(labelKey(name)));
+  const labelManagerBusy = deletingLabels || creatingStandaloneLabel || renamingLabel || working || undoing;
   const pinnedNotes = notes.filter((note) => note.pinned);
   const otherNotes = notes.filter((note) => !note.pinned);
   const selectedActiveCount = notes.filter((note) => selectedNoteIds.has(note.id) && !note.archived).length;
@@ -1136,29 +1198,42 @@ export default function App() {
         </section>
       </div>}
 
-      {labelManagerOpen && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !deletingLabels && !creatingStandaloneLabel) closeLabelManager(); }}>
+      {labelManagerOpen && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !labelManagerBusy) closeLabelManager(); }}>
         <section className="utility-modal" role="dialog" aria-modal="true" aria-label="ラベル整理">
-          <div className="editor-heading"><h2>ラベル整理</h2><button type="button" className="close" aria-label="閉じる" onClick={closeLabelManager} disabled={deletingLabels || creatingStandaloneLabel}>×</button></div>
-          {!labelDeleteConfirm && <LabelCreator disabled={deletingLabels || creatingStandaloneLabel} onCreate={(name) => createStandaloneLabel(name)} />}
+          <div className="editor-heading"><h2>ラベル整理</h2><button type="button" className="close" aria-label="閉じる" onClick={closeLabelManager} disabled={labelManagerBusy}>×</button></div>
+          {!labelDeleteConfirm && <LabelCreator disabled={labelManagerBusy || editingLabel !== null} onCreate={(name) => createStandaloneLabel(name)} />}
           {labelDeleteConfirm ? <>
             <p>{deleteLabelNames.length <= 3
               ? `「${deleteLabelNames.join("」「")}」を削除しますか？`
               : `選択した${deleteLabelNames.length}件のラベルを削除しますか？`}</p>
             <p>これらのラベルはメモからも外れます。メモ本体は削除されません。</p>
           </> : <div className="label-manager-list">
-            {availableLabels.map((name) => <label key={labelKey(name)}>
-              <input type="checkbox" checked={labelsToDelete.includes(labelKey(name))}
-                disabled={deletingLabels || creatingStandaloneLabel || (labelsToDelete.length >= 50 && !labelsToDelete.includes(labelKey(name)))}
-                onChange={() => toggleLabelToDelete(name)} />{name}
-            </label>)}
+            {availableLabels.map((name) => <div className="label-manager-entry" key={labelKey(name)}>
+              <div className="label-manager-row">
+                <label><input type="checkbox" checked={labelsToDelete.includes(labelKey(name))}
+                  disabled={labelManagerBusy || editingLabel !== null || (labelsToDelete.length >= 50 && !labelsToDelete.includes(labelKey(name)))}
+                  onChange={() => toggleLabelToDelete(name)} />{name}</label>
+                <button type="button" aria-label={`${name}のラベル名を変更`} title="ラベル名を変更"
+                  disabled={labelManagerBusy || editingLabel !== null}
+                  onClick={() => { setEditingLabel(name); setRenameName(name); setRenameError(""); setLabelDeleteError(""); }}>✎</button>
+              </div>
+              {editingLabel === name && <div className="label-rename-row">
+                <input aria-label="変更後のラベル名" value={renameName} maxLength={100} disabled={labelManagerBusy}
+                  onChange={(event) => setRenameName(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void renameLabel(); } }} />
+                <button type="button" className="primary" disabled={labelManagerBusy || !renameName.trim()} onClick={() => void renameLabel()}>保存</button>
+                <button type="button" disabled={labelManagerBusy} onClick={cancelLabelRename}>キャンセル</button>
+              </div>}
+            </div>)}
             {availableLabels.length === 0 && <p>ラベルはありません。</p>}
           </div>}
           {labelDeleteError && <p className="error" role="alert">{labelDeleteError}</p>}
+          {renameError && <p className="error" role="alert">{renameError}</p>}
           <div className="label-manager-actions">
-            <button type="button" className="label-cancel-button" onClick={() => labelDeleteConfirm ? setLabelDeleteConfirm(false) : closeLabelManager()} disabled={deletingLabels || creatingStandaloneLabel}>キャンセル</button>
+            <button type="button" className="label-cancel-button" onClick={() => labelDeleteConfirm ? setLabelDeleteConfirm(false) : closeLabelManager()} disabled={labelManagerBusy}>キャンセル</button>
             {labelDeleteConfirm
-              ? <button type="button" className="label-delete-button" onClick={() => { void deleteSelectedLabels(); }} disabled={deletingLabels || deleteLabelNames.length === 0}>削除</button>
-              : <button type="button" className="label-delete-button" onClick={() => { setLabelDeleteError(""); setLabelDeleteConfirm(true); }} disabled={creatingStandaloneLabel || deleteLabelNames.length === 0}>選択したラベルを削除</button>}
+              ? <button type="button" className="label-delete-button" onClick={() => { void deleteSelectedLabels(); }} disabled={labelManagerBusy || deleteLabelNames.length === 0}>削除</button>
+              : <button type="button" className="label-delete-button" onClick={() => { setLabelDeleteError(""); setLabelDeleteConfirm(true); }} disabled={labelManagerBusy || editingLabel !== null || deleteLabelNames.length === 0}>選択したラベルを削除</button>}
           </div>
         </section>
       </div>}

@@ -103,6 +103,12 @@ button.card-content:hover { background: #ffffff70; }
 .label-manager-list { display: grid; gap: 2px; max-height: 50vh; overflow-y: auto; }
 .label-manager-list label { display: flex; align-items: center; gap: 10px; padding: 7px 4px; overflow-wrap: anywhere; }
 .label-manager-list input { width: 18px; height: 18px; flex: 0 0 auto; }
+.label-manager-row { display: flex; align-items: center; gap: 8px; }
+.label-manager-row label { flex: 1; min-width: 0; }
+.label-manager-row > button, .label-rename-row button { flex-shrink: 0; border: 1px solid #cecec8; border-radius: 7px; background: white; color: inherit; padding: 6px 10px; }
+.label-rename-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 0 8px; }
+.label-rename-row input { flex: 1 1 100px; min-width: 0; width: 100%; height: auto; border: 1px solid #cecec8; border-radius: 7px; padding: 7px 9px; background: white; color: inherit; }
+.label-rename-row button.primary { background: #f4c84c; color: #242424; border-color: #f4c84c; }
 .label-manager-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
 .label-manager-actions button { border-radius: 8px; padding: 9px 12px; }
 .label-cancel-button { border: 1px solid #cecec8; background: white; color: #242424; }
@@ -229,6 +235,7 @@ h2 { margin: 0; font-size: 1.15rem; }
 :root[data-theme="dark"] .sidebar-nav button.selected { background: #5a4a20; color: #fff2ca; }
 :root[data-theme="dark"] .settings-dropdown, :root[data-theme="dark"] .utility-modal { background: #26282b; border-color: #4b4d50; }
 :root[data-theme="dark"] .label-cancel-button { background: #303237; border-color: #63666a; color: #eeeae0; }
+:root[data-theme="dark"] .label-manager-row > button, :root[data-theme="dark"] .label-rename-row button:not(.primary), :root[data-theme="dark"] .label-rename-row input { background: #303237; border-color: #63666a; color: #eeeae0; }
 :root[data-theme="dark"] .label-delete-button { background: #963735; border-color: #c35b58; color: white; }
 :root[data-theme="dark"] .settings-dropdown button:hover { background: #373a3e; }
 :root[data-theme="dark"] .card, :root[data-theme="dark"] .editor { --note-bg: #2c2e31; border-color: #55565a; }
