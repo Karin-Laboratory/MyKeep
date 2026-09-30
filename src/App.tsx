@@ -19,6 +19,7 @@ type PendingImage = { id: string; file: File; previewUrl: string };
 type UndoAction = { message: string; undo?: () => Promise<void> };
 type BulkOperation = "archive" | "unarchive" | "trash" | "restore" | "permanent" | "addLabels" | "removeLabel";
 type BulkResult = { message: string; failed: number };
+type CreatedLabel = { label: string; created: boolean };
 
 const emptyNote: NoteDraft = { title: "", body: "", url: "", pinned: false, archived: false, color: "default", checklist: [] };
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -34,6 +35,11 @@ const DARK_SETTING = "mykeep.darkMode";
 
 function labelKey(name: string): string {
   return name.trim().normalize("NFC").toLowerCase();
+}
+
+function normalizedLabelName(value: string): string | null {
+  const name = value.trim().normalize("NFC");
+  return name && name.length <= 100 ? name : null;
 }
 
 function trashRemainingDays(deletedAt: string | null): number | null {
@@ -107,6 +113,41 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
   return data;
 }
 
+function LabelCreator({ disabled, onCreate }: { disabled: boolean; onCreate: (name: string) => Promise<CreatedLabel> }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const pendingRef = useRef(false);
+  async function add() {
+    if (disabled || pendingRef.current) return;
+    setMessage("");
+    setError("");
+    const normalized = normalizedLabelName(name);
+    if (!normalized) { setError("ラベル名は1〜100文字で入力してください。"); return; }
+    pendingRef.current = true;
+    try {
+      const result = await onCreate(normalized);
+      setMessage(result.created ? `「${result.label}」を作成しました。` : `「${result.label}」は既に存在します。`);
+      setName("");
+      setOpen(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "ラベルを作成できませんでした。");
+    } finally { pendingRef.current = false; }
+  }
+  return <div className="standalone-label-creator">
+    <button type="button" className="create-label-button" disabled={disabled} aria-expanded={open}
+      onClick={() => { setOpen((current) => !current); setMessage(""); setError(""); }}>＋ 新規ラベルを作成</button>
+    {open && <div className="new-label-row">
+      <input aria-label="新しいラベル名" placeholder="新しいラベル名" maxLength={100} value={name} disabled={disabled}
+        onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void add(); } }} />
+      <button type="button" disabled={disabled || !name.trim()} onClick={() => void add()}>追加</button>
+    </div>}
+    {message && <p role="status">{message}</p>}
+    {error && <p className="error" role="alert">{error}</p>}
+  </div>;
+}
+
 export default function App() {
   const [view, setView] = useState<View>("active");
   const [search, setSearch] = useState("");
@@ -151,6 +192,7 @@ export default function App() {
   const [labelsToDelete, setLabelsToDelete] = useState<string[]>([]);
   const [labelDeleteConfirm, setLabelDeleteConfirm] = useState(false);
   const [deletingLabels, setDeletingLabels] = useState(false);
+  const [creatingStandaloneLabel, setCreatingStandaloneLabel] = useState(false);
   const [labelDeleteError, setLabelDeleteError] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -371,8 +413,8 @@ export default function App() {
   }
 
   function addNewLabel() {
-    const name = newLabelName.trim().normalize("NFC");
-    if (!name || name.length > 100) {
+    const name = normalizedLabelName(newLabelName);
+    if (!name) {
       setError("ラベル名は1〜100文字で入力してください。");
       return;
     }
@@ -388,6 +430,17 @@ export default function App() {
     setNewLabelName("");
     setCreatingLabel(false);
     setError("");
+  }
+
+  async function createStandaloneLabel(name: string, selectForBulk = false): Promise<CreatedLabel> {
+    setCreatingStandaloneLabel(true);
+    try {
+      const result = await api<CreatedLabel>("/api/labels", { method: "POST", body: JSON.stringify({ name }) });
+      setAvailableLabels((current) => [...current.filter((label) => labelKey(label) !== labelKey(result.label)), result.label].sort());
+      if (selectForBulk) setBulkLabels((current) => current.some((label) => labelKey(label) === labelKey(result.label)) ? current : [...current, result.label]);
+      setReload((value) => value + 1);
+      return result;
+    } finally { setCreatingStandaloneLabel(false); }
   }
 
   function selectView(nextView: View) {
@@ -1059,17 +1112,18 @@ export default function App() {
         {undoAction.undo && <button type="button" disabled={working || undoing} onClick={() => void undoLastAction()}>取り消す</button>}
       </div>}
 
-      {bulkLabelsOpen && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !working) setBulkLabelsOpen(false); }}>
+      {bulkLabelsOpen && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !working && !creatingStandaloneLabel) setBulkLabelsOpen(false); }}>
         <section className="utility-modal" role="dialog" aria-modal="true" aria-label="一括ラベル追加">
-          <div className="editor-heading"><h2>ラベルを追加</h2><button type="button" className="close" aria-label="閉じる" disabled={working} onClick={() => setBulkLabelsOpen(false)}>×</button></div>
+          <div className="editor-heading"><h2>ラベルを追加</h2><button type="button" className="close" aria-label="閉じる" disabled={working || creatingStandaloneLabel} onClick={() => setBulkLabelsOpen(false)}>×</button></div>
+          <LabelCreator disabled={working || creatingStandaloneLabel || bulkLabels.length >= 50} onCreate={(name) => createStandaloneLabel(name, true)} />
           <div className="label-manager-list">
-            {availableLabels.map((name) => <label key={name}><input type="checkbox" checked={bulkLabels.includes(name)} disabled={working || (!bulkLabels.includes(name) && bulkLabels.length >= 50)}
+            {availableLabels.map((name) => <label key={name}><input type="checkbox" checked={bulkLabels.includes(name)} disabled={working || creatingStandaloneLabel || (!bulkLabels.includes(name) && bulkLabels.length >= 50)}
               onChange={() => setBulkLabels((current) => current.includes(name) ? current.filter((label) => label !== name) : [...current, name])} />{name}</label>)}
           </div>
           {!availableLabels.length && <p>登録済みラベルはありません。</p>}
           <div className="label-manager-actions">
-            <button type="button" className="label-cancel-button" disabled={working} onClick={() => setBulkLabelsOpen(false)}>キャンセル</button>
-            <button type="button" className="primary" disabled={working || !bulkLabels.length || !selectedNoteIds.size} onClick={() => void runBulk("addLabels", bulkLabels)}>適用</button>
+            <button type="button" className="label-cancel-button" disabled={working || creatingStandaloneLabel} onClick={() => setBulkLabelsOpen(false)}>キャンセル</button>
+            <button type="button" className="primary" disabled={working || creatingStandaloneLabel || !bulkLabels.length || !selectedNoteIds.size} onClick={() => void runBulk("addLabels", bulkLabels)}>適用</button>
           </div>
         </section>
       </div>}
@@ -1082,9 +1136,10 @@ export default function App() {
         </section>
       </div>}
 
-      {labelManagerOpen && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !deletingLabels) closeLabelManager(); }}>
+      {labelManagerOpen && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !deletingLabels && !creatingStandaloneLabel) closeLabelManager(); }}>
         <section className="utility-modal" role="dialog" aria-modal="true" aria-label="ラベル整理">
-          <div className="editor-heading"><h2>ラベル整理</h2><button type="button" className="close" aria-label="閉じる" onClick={closeLabelManager} disabled={deletingLabels}>×</button></div>
+          <div className="editor-heading"><h2>ラベル整理</h2><button type="button" className="close" aria-label="閉じる" onClick={closeLabelManager} disabled={deletingLabels || creatingStandaloneLabel}>×</button></div>
+          {!labelDeleteConfirm && <LabelCreator disabled={deletingLabels || creatingStandaloneLabel} onCreate={(name) => createStandaloneLabel(name)} />}
           {labelDeleteConfirm ? <>
             <p>{deleteLabelNames.length <= 3
               ? `「${deleteLabelNames.join("」「")}」を削除しますか？`
@@ -1093,17 +1148,17 @@ export default function App() {
           </> : <div className="label-manager-list">
             {availableLabels.map((name) => <label key={labelKey(name)}>
               <input type="checkbox" checked={labelsToDelete.includes(labelKey(name))}
-                disabled={deletingLabels || (labelsToDelete.length >= 50 && !labelsToDelete.includes(labelKey(name)))}
+                disabled={deletingLabels || creatingStandaloneLabel || (labelsToDelete.length >= 50 && !labelsToDelete.includes(labelKey(name)))}
                 onChange={() => toggleLabelToDelete(name)} />{name}
             </label>)}
             {availableLabels.length === 0 && <p>ラベルはありません。</p>}
           </div>}
           {labelDeleteError && <p className="error" role="alert">{labelDeleteError}</p>}
           <div className="label-manager-actions">
-            <button type="button" className="label-cancel-button" onClick={() => labelDeleteConfirm ? setLabelDeleteConfirm(false) : closeLabelManager()} disabled={deletingLabels}>キャンセル</button>
+            <button type="button" className="label-cancel-button" onClick={() => labelDeleteConfirm ? setLabelDeleteConfirm(false) : closeLabelManager()} disabled={deletingLabels || creatingStandaloneLabel}>キャンセル</button>
             {labelDeleteConfirm
               ? <button type="button" className="label-delete-button" onClick={() => { void deleteSelectedLabels(); }} disabled={deletingLabels || deleteLabelNames.length === 0}>削除</button>
-              : <button type="button" className="label-delete-button" onClick={() => { setLabelDeleteError(""); setLabelDeleteConfirm(true); }} disabled={deleteLabelNames.length === 0}>選択したラベルを削除</button>}
+              : <button type="button" className="label-delete-button" onClick={() => { setLabelDeleteError(""); setLabelDeleteConfirm(true); }} disabled={creatingStandaloneLabel || deleteLabelNames.length === 0}>選択したラベルを削除</button>}
           </div>
         </section>
       </div>}

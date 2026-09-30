@@ -55,7 +55,7 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 700; }
 .import-content label { display: grid; gap: 6px; }
 .import-content input { max-width: 100%; }
 .import-content p { margin: 0; line-height: 1.6; }
-.grid { columns: 210px; column-gap: 16px; }
+.grid { column-count: 4; column-gap: 16px; }
 .note-section-separator { height: 30px; }
 .card { width: 100%; min-width: 0; margin-bottom: 16px; break-inside: avoid; border: 1px solid #dddcd5; border-radius: 12px; background: var(--note-bg, #fff); box-shadow: 0 2px 5px #00000008; overflow: hidden; }
 .card[data-color="red"], .editor[data-color="red"] { --note-bg: #ffe9e7; }
@@ -124,6 +124,9 @@ h2 { margin: 0; font-size: 1.15rem; }
 .create-label-button:hover, .label-options label:hover { background: #f1f1ed; }
 .new-label-row { display: flex; gap: 6px; padding: 5px; }
 .new-label-row input { flex: 1; min-width: 0; }
+.standalone-label-creator .new-label-row input { width: 100%; border: 1px solid #cecec8; border-radius: 6px; padding: 8px; background: white; color: inherit; }
+.standalone-label-creator p { padding: 5px; font-size: .85rem; }
+.standalone-label-creator .new-label-row button { color: #242424; }
 .new-label-row button { border: 1px solid #cecec8; border-radius: 6px; background: #f4c84c; padding: 4px 9px; }
 .label-options { display: grid; }
 .label-options label { display: flex; align-items: center; gap: 8px; border-radius: 5px; padding: 7px; overflow-wrap: anywhere; }
@@ -153,6 +156,9 @@ h2 { margin: 0; font-size: 1.15rem; }
 .image-hint { margin: 0; color: #777; font-size: .84rem; }
 .editor-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .danger { margin-right: auto; border: 0; background: transparent; color: #a52f2f; padding: 10px; }
+@media (max-width: 1000px) {
+  .grid { column-count: 3; }
+}
 @media (max-width: 760px) {
   .app { padding: 0 14px 32px; }
   .topbar { min-height: 66px; flex-wrap: wrap; justify-content: space-between; gap: 10px; padding: 12px 0; }
@@ -168,7 +174,7 @@ h2 { margin: 0; font-size: 1.15rem; }
   .sidebar.open { visibility: visible; pointer-events: auto; transform: translateX(0); }
   .sidebar-title { display: block; margin: 0 12px 24px; font-size: 1.35rem; font-weight: 700; }
   .sidebar-scrim { display: block; position: fixed; z-index: 20; inset: 0 0 0 min(280px, calc(100vw - 40px)); border: 0; background: #0006; }
-  .grid { columns: 2; column-gap: 10px; }
+  .grid { column-count: 2; column-gap: 10px; }
   .card { margin-bottom: 12px; }
   .card-content { padding: 12px 10px 6px; gap: 6px; font-size: .88rem; }
   .card-content > strong { font-size: .9rem; }
@@ -189,7 +195,7 @@ h2 { margin: 0; font-size: 1.15rem; }
   .utility-modal { padding: 18px; }
 }
 @media (max-width: 300px) {
-  .grid { columns: 1; }
+  .grid { column-count: 1; }
   .selecting .main-content { padding-bottom: 260px; }
 }
 @media (max-width: 360px) {
@@ -240,6 +246,7 @@ h2 { margin: 0; font-size: 1.15rem; }
 :root[data-theme="dark"] .error { color: #ffb3af; background: #512d2d; }
 :root[data-theme="dark"] .trash-countdown { color: #bcbdbd; }
 :root[data-theme="dark"] .close { color: #eeeae0; }
+:root[data-theme="dark"] .standalone-label-creator .new-label-row input { background: #282a2d; border-color: #55595d; color: #f4f1e9; }
 :root[data-theme="dark"] .bulk-toolbar { background: #26282b; border-color: #55595d; }
 :root[data-theme="dark"] .list-tools button, :root[data-theme="dark"] .bulk-toolbar button, :root[data-theme="dark"] .card-select:not([aria-pressed="true"]) { background: #303237; border-color: #777a7d; color: #eeeae0; }
 :root[data-theme="dark"] .bulk-toolbar .bulk-danger { color: #ffaaaa; }

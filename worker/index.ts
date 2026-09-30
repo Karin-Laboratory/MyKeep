@@ -262,9 +262,24 @@ async function listNotes(request: Request, env: Env): Promise<Response> {
 
 async function listLabels(env: Env): Promise<Response> {
   const result = await env.DB.prepare(
-    "SELECT l.name FROM labels l WHERE EXISTS (SELECT 1 FROM note_labels nl WHERE nl.label_key = l.name_key) ORDER BY l.name",
+    "SELECT name FROM labels ORDER BY name",
   ).all<{ name: string }>();
   return json({ labels: (result.results ?? []).map((row) => row.name) });
+}
+
+async function createLabel(request: Request, env: Env): Promise<Response> {
+  const value = await readInput(request, 20_000);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return json({ error: "ラベル名を確認してください。" }, 400);
+  const rawName = (value as Record<string, unknown>).name;
+  if (typeof rawName !== "string") return json({ error: "ラベル名を確認してください。" }, 400);
+  const name = rawName.trim().normalize("NFC");
+  if (!name || name.length > 100) return json({ error: "ラベル名は1〜100文字で入力してください。" }, 400);
+  const key = labelKey(name);
+  const result = await env.DB.prepare("INSERT OR IGNORE INTO labels (name_key, name) VALUES (?, ?)").bind(key, name).run();
+  const label = await env.DB.prepare("SELECT name FROM labels WHERE name_key = ?").bind(key).first<{ name: string }>();
+  if (!label) return json({ error: "ラベルが見つかりません。" }, 404);
+  const created = result.meta.changes > 0;
+  return json({ label: label.name, created }, created ? 201 : 200);
 }
 
 async function deleteLabels(request: Request, env: Env): Promise<Response> {
@@ -645,6 +660,7 @@ export default {
 
       if (url.pathname === "/api/labels") {
         if (request.method === "GET") return await listLabels(env);
+        if (request.method === "POST") return await createLabel(request, env);
         if (request.method === "DELETE") return await deleteLabels(request, env);
       }
 
