@@ -191,6 +191,31 @@ function readPageMetadata() {
       return "";
     }
   };
+  const youtubeHosts = ["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"];
+  const youtubeVideoId = (value) => {
+    try {
+      const url = new URL(value, location.href);
+      if (!["http:", "https:"].includes(url.protocol) || !youtubeHosts.includes(url.hostname)) return null;
+      const id = url.hostname === "youtu.be" ? /^\/([^/]+)\/?$/.exec(url.pathname)?.[1]
+        : url.pathname === "/watch" ? url.searchParams.get("v")
+          : /^\/(?:shorts|live)\/([^/]+)\/?$/.exec(url.pathname)?.[1];
+      return typeof id === "string" && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+    } catch { return null; }
+  };
+  if (youtubeHosts.includes(location.hostname)) {
+    const currentId = youtubeVideoId(location.href);
+    const references = [
+      readMeta(['meta[property="og:url"]', 'meta[name="og:url"]']),
+      document.querySelector('link[rel~="canonical"]')?.getAttribute("href")?.trim(),
+    ].filter(Boolean);
+    // 一致を確認できない場合も、前動画のOG/Twitter情報を保存しない。
+    if (!currentId || !references.length || references.some((value) => youtubeVideoId(value) !== currentId)) {
+      return {
+        title: (document.title || "").replace(/ - YouTube$/, ""),
+        description: "", image: "", hostname: location.hostname, href: location.href,
+      };
+    }
+  }
   const title = readMeta([
     'meta[property="og:title"]',
     'meta[name="og:title"]',
@@ -224,10 +249,23 @@ function readPageMetadata() {
     'meta[property="twitter:image:src"]',
     'meta[name="twitter:image:src"]',
   ]);
-  return { title, description, image, hostname: location.hostname || "" };
+  return { title, description, image, hostname: location.hostname || "", href: location.href };
 }
 
 async function loadPage() {
+  title.value = "";
+  url.value = "";
+  body.value = "";
+  pagePreview = { title: "", description: "", image: "", hostname: "" };
+  hideSavedNoteLink();
+  showStatus("");
+  selectedLabels = [];
+  renderSelectedLabels();
+  updateLabelOptionState();
+  labelOptions.hidden = true;
+  labelToggle.setAttribute("aria-expanded", "false");
+  clearImage();
+  save.disabled = true;
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     title.value = limitText(typeof tab?.title === "string" ? tab.title : "", 300);
@@ -243,11 +281,12 @@ async function loadPage() {
       const [injected] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: readPageMetadata });
       const metadata = injected?.result;
       if (metadata && typeof metadata === "object") {
+        if (isHttpUrl(metadata.href)) url.value = metadata.href;
         const metadataTitle = limitText(metadata.title, 300);
         const metadataDescription = limitText(metadata.description, 500);
         const metadataImage = isHttpUrl(metadata.image) ? limitText(metadata.image, 2000) : "";
         const metadataHostname = limitText(metadata.hostname, 255);
-        if (metadataTitle) title.value = metadataTitle;
+        if (typeof metadata.title === "string") title.value = metadataTitle;
         pagePreview = {
           title: metadataTitle || title.value,
           description: metadataDescription,
@@ -313,7 +352,6 @@ document.addEventListener("click", (event) => {
 void loadPage();
 void loadLabels();
 
-document.getElementById("openOptions").addEventListener("click", () => chrome.runtime.openOptionsPage());
 document.getElementById("removeImage").addEventListener("click", clearImage);
 openNote.addEventListener("click", async () => {
   if (!savedNoteUrl) return;

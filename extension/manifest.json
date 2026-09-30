@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MyKeep Capture",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "現在のページをMyKeepに保存します。",
   "permissions": ["activeTab", "storage", "scripting"],
   "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],

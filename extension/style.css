@@ -6,6 +6,10 @@ body { margin: 0; padding: 16px; }
 header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 h1 { margin: 0 0 16px; font-size: 1.1rem; }
 header h1 { margin: 0; }
+.popup header { display: grid; grid-template-columns: minmax(0, 1fr) 108px 52px; gap: 6px; }
+.popup header h1 { font-size: .9rem; white-space: nowrap; }
+.popup header button { width: 100%; padding: 7px 5px; font-size: .75rem; white-space: nowrap; }
+.open-note-slot { min-height: 32px; }
 form { display: grid; gap: 12px; margin-top: 14px; }
 label { display: grid; gap: 5px; font-size: .85rem; font-weight: 600; }
 .labels-field { display: grid; gap: 5px; font-size: .85rem; font-weight: 600; }
@@ -13,7 +17,7 @@ label { display: grid; gap: 5px; font-size: .85rem; font-weight: 600; }
 input, textarea, button { font: inherit; }
 input, textarea { width: 100%; border: 1px solid #cecec8; border-radius: 7px; background: #fff; padding: 8px; color: #242424; font-weight: 400; }
 input[readonly] { background: #efefed; color: #555; }
-textarea { resize: vertical; min-height: 76px; }
+textarea { resize: vertical; min-height: 36px; }
 button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .55; }
 .primary { border: 0; border-radius: 8px; padding: 10px 14px; background: #f4c84c; color: #242424; font-weight: 700; }
