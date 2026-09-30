@@ -4,7 +4,7 @@ body { margin: 0; }
 button, input, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .55; }
-.app { --topbar-height: 76px; max-width: 1200px; margin: 0 auto; padding: 0 20px 48px; }
+.app { --topbar-height: 76px; max-width: 1480px; margin: 0 auto; padding: 0 20px 48px; }
 .topbar { position: sticky; top: 0; z-index: 7; min-height: var(--topbar-height); display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #e7e7e1; background: #f8f8f6; }
 .brand { display: flex; align-items: center; gap: 10px; }
 h1 { margin: 0; font-size: 1.35rem; font-weight: 700; }
