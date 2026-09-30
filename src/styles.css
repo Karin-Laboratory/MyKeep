@@ -41,7 +41,7 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 700; }
 .import-content input { max-width: 100%; }
 .import-content p { margin: 0; line-height: 1.6; }
 .grid { columns: 210px; column-gap: 16px; }
-.note-section-separator { height: 8px; }
+.note-section-separator { height: 30px; }
 .card { width: 100%; min-width: 0; margin-bottom: 16px; break-inside: avoid; border: 1px solid #dddcd5; border-radius: 12px; background: var(--note-bg, #fff); box-shadow: 0 2px 5px #00000008; overflow: hidden; }
 .card[data-color="red"], .editor[data-color="red"] { --note-bg: #ffe9e7; }
 .card[data-color="orange"], .editor[data-color="orange"] { --note-bg: #ffeddc; }
@@ -74,6 +74,11 @@ button.card-content:hover { background: #ffffff70; }
 .card-actions button { border: 0; border-radius: 7px; background: transparent; color: #555; padding: 7px; font-size: .84rem; }
 .card-actions button:hover:not(:disabled) { background: #f1f1ed; }
 .card-actions button.danger { color: #a52f2f; margin-right: 0; }
+.card-actions .trash-action { margin-left: auto; }
+.trash-countdown { margin: 4px 18px 0; color: #777; font-size: .76rem; }
+.snackbar { position: fixed; z-index: 9; left: 20px; bottom: 20px; max-width: calc(100vw - 40px); display: flex; align-items: center; gap: 18px; padding: 10px 16px; border-radius: 8px; background: #303134; color: #f5f5f5; box-shadow: 0 4px 16px #0003; font-size: .9rem; }
+.snackbar span { min-width: 0; overflow-wrap: anywhere; }
+.snackbar button { flex-shrink: 0; border: 0; background: transparent; color: #f4cf65; padding: 8px 0; font-weight: 600; }
 .empty, .status { color: #777; text-align: center; margin: 70px 0; }
 .more { display: block; margin: 28px auto 0; border: 1px solid #d2d2ca; border-radius: 9px; background: white; padding: 10px 18px; }
 .error { color: #972e2e; background: #fff0ef; border-radius: 8px; padding: 10px 14px; }
@@ -199,4 +204,5 @@ h2 { margin: 0; font-size: 1.15rem; }
 :root[data-theme="dark"] .card-actions button.danger, :root[data-theme="dark"] .checklist-row button, :root[data-theme="dark"] .editor-image button, :root[data-theme="dark"] .danger { color: #ffaaaa; }
 :root[data-theme="dark"] .more { color: #eeeae0; background: #2e3034; border-color: #56595c; }
 :root[data-theme="dark"] .error { color: #ffb3af; background: #512d2d; }
+:root[data-theme="dark"] .trash-countdown { color: #bcbdbd; }
 :root[data-theme="dark"] .close { color: #eeeae0; }

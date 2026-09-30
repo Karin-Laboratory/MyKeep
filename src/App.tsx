@@ -16,6 +16,7 @@ type ImportCounts = { done: number; total: number; success: number; failed: numb
 type ImportProgress = { notes: ImportCounts & { trashed: number }; attachments: ImportCounts };
 type NoteDraft = NoteInput & { checklist: ChecklistInput[] };
 type PendingImage = { id: string; file: File; previewUrl: string };
+type UndoAction = { message: string; undo: () => Promise<void> };
 
 const emptyNote: NoteDraft = { title: "", body: "", url: "", pinned: false, archived: false, color: "default", checklist: [] };
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -31,6 +32,13 @@ const DARK_SETTING = "mykeep.darkMode";
 
 function labelKey(name: string): string {
   return name.trim().normalize("NFC").toLowerCase();
+}
+
+function trashRemainingDays(deletedAt: string | null): number | null {
+  const deleted = deletedAt ? Date.parse(deletedAt) : NaN;
+  if (!Number.isFinite(deleted)) return null;
+  const day = 24 * 60 * 60 * 1000;
+  return Math.max(0, Math.ceil((deleted + 30 * day - Date.now()) / day));
 }
 
 function savedSetting(key: string, fallback: boolean): boolean {
@@ -106,6 +114,9 @@ export default function App() {
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
+  const [undoAction, setUndoAction] = useState<UndoAction | null>(null);
+  const [undoing, setUndoing] = useState(false);
+  const undoingRef = useRef(false);
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -143,6 +154,12 @@ export default function App() {
   const lastListPathRef = useRef("");
   const refreshingRef = useRef(false);
   const deepLinkNoteRef = useRef(new URL(window.location.href).searchParams.get("note"));
+
+  useEffect(() => {
+    if (!undoAction || undoing) return;
+    const timer = window.setTimeout(() => setUndoAction(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [undoAction, undoing]);
 
   useEffect(() => {
     const id = deepLinkNoteRef.current;
@@ -482,12 +499,59 @@ export default function App() {
     if (working) return;
     setWorking(true);
     setError("");
+    if (field === "archived") setUndoAction(null);
     try {
       await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify({ [field]: !note[field] }) });
       setReload((value) => value + 1);
+      if (field === "archived") {
+        setUndoAction({
+          message: note.archived ? "アーカイブから戻しました。" : "アーカイブしました。",
+          undo: async () => {
+            await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify({ archived: note.archived }) });
+          },
+        });
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "更新に失敗しました。");
     } finally {
+      setWorking(false);
+    }
+  }
+
+  async function moveCardToTrash(note: Note) {
+    if (working) return;
+    setWorking(true);
+    setError("");
+    setUndoAction(null);
+    try {
+      await api(`/api/notes/${note.id}`, { method: "DELETE" });
+      setReload((value) => value + 1);
+      setUndoAction({
+        message: "ゴミ箱に移動しました。",
+        undo: async () => { await api(`/api/notes/${note.id}/restore`, { method: "POST" }); },
+      });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "削除に失敗しました。");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function undoLastAction() {
+    if (!undoAction || working || undoingRef.current) return;
+    undoingRef.current = true;
+    setUndoing(true);
+    setWorking(true);
+    setError("");
+    try {
+      await undoAction.undo();
+      setReload((value) => value + 1);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "取り消しに失敗しました。");
+    } finally {
+      setUndoAction(null);
+      undoingRef.current = false;
+      setUndoing(false);
       setWorking(false);
     }
   }
@@ -721,6 +785,7 @@ export default function App() {
 
   function renderNoteCard(note: Note) {
     const visiblePreview = richLinkPreview ? mergeLinkPreview(note, previews[note.url]) : null;
+    const remainingDays = view === "trash" ? trashRemainingDays(note.deleted_at) : null;
     return (
       <article className="card" data-color={note.color} key={note.id}>
         {view === "trash"
@@ -737,6 +802,9 @@ export default function App() {
               </span>
             </a>
           : <a className="note-link" href={note.url} target="_blank" rel="noopener noreferrer">{note.url}</a>)}
+        {remainingDays !== null && <p className="trash-countdown">
+          {remainingDays > 0 ? `完全削除まで あと${remainingDays}日` : "まもなく完全削除"}
+        </p>}
         <div className="card-actions">
           {view === "trash" ? <>
             <button disabled={working} onClick={() => restore(note)}>復元</button>
@@ -744,6 +812,7 @@ export default function App() {
           </> : <>
             <button disabled={working} onClick={() => updateFlag(note, "pinned")}>{note.pinned ? "ピン解除" : "ピン留め"}</button>
             <button disabled={working} onClick={() => updateFlag(note, "archived")}>{note.archived ? "戻す" : "アーカイブ"}</button>
+            {view === "archived" && <button className="trash-action" disabled={working} onClick={() => moveCardToTrash(note)}>ゴミ箱</button>}
           </>}
         </div>
       </article>
@@ -807,6 +876,11 @@ export default function App() {
       {hasMore && !loading && <button className="more" onClick={loadMore}>続きを読み込む</button>}
         </div>
       </div>
+
+      {undoAction && <div className="snackbar" role="status" aria-atomic="true">
+        <span>{undoAction.message}</span>
+        <button type="button" disabled={working || undoing} onClick={() => void undoLastAction()}>取り消す</button>
+      </div>}
 
       {settingsOpen && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
         <section className="utility-modal" role="dialog" aria-modal="true" aria-label="設定">
