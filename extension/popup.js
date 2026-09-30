@@ -1,21 +1,268 @@
-import { captureEndpoint, IMAGE_TYPES, MAX_IMAGE_BYTES } from "./shared.js";
+import { captureEndpoint, IMAGE_TYPES, MAX_IMAGE_BYTES, noteUrlFromCaptureEndpoint } from "./shared.js";
+
+const MAX_LABEL_SELECTIONS = 50;
 
 const form = document.getElementById("captureForm");
 const title = document.getElementById("title");
 const url = document.getElementById("url");
 const body = document.getElementById("body");
+const labelPicker = document.querySelector(".label-picker");
+const labelToggle = document.getElementById("labelToggle");
+const labelOptions = document.getElementById("labelOptions");
+const selectedLabelsElement = document.getElementById("selectedLabels");
+const labelStatus = document.getElementById("labelStatus");
 const imageFile = document.getElementById("imageFile");
 const imagePreview = document.getElementById("imagePreview");
 const previewImage = document.getElementById("previewImage");
 const imageName = document.getElementById("imageName");
 const status = document.getElementById("status");
 const save = document.getElementById("save");
+const openNote = document.getElementById("openNote");
 let selectedImage = null;
 let previewUrl = null;
+let availableLabels = [];
+let selectedLabels = [];
+let savedNoteUrl = "";
+let pagePreview = { title: "", description: "", image: "", hostname: "" };
 
 function showStatus(message, error = false) {
   status.textContent = message;
   status.classList.toggle("error", error);
+}
+
+function showLabelStatus(message) {
+  labelStatus.textContent = message;
+}
+
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function pageHostname(value) {
+  try {
+    const parsed = new URL(value);
+    return isHttpUrl(value) ? parsed.hostname : "";
+  } catch {
+    return "";
+  }
+}
+
+function setSaveEnabled() {
+  save.disabled = !isHttpUrl(url.value) || url.value.length > 2000;
+}
+
+function limitText(value, maxLength) {
+  return typeof value === "string" ? value.slice(0, maxLength) : "";
+}
+
+function labelKey(value) {
+  return value.trim().normalize("NFC").toLowerCase();
+}
+
+function normalizeLabels(values) {
+  const result = [];
+  const seen = new Set();
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const name = value.trim().normalize("NFC");
+    if (!name || name.length > 100) continue;
+    const key = labelKey(name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(name);
+  }
+  return result;
+}
+
+function renderSelectedLabels() {
+  selectedLabelsElement.replaceChildren();
+  for (const name of selectedLabels) {
+    const chip = document.createElement("span");
+    chip.className = "selected-label";
+    chip.append(document.createTextNode(name));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "text-button";
+    remove.setAttribute("aria-label", `${name}を解除`);
+    remove.textContent = "×";
+    remove.addEventListener("click", () => toggleLabel(name, false));
+    chip.append(remove);
+    selectedLabelsElement.append(chip);
+  }
+  labelToggle.textContent = selectedLabels.length ? `ラベル（${selectedLabels.length}件）` : "ラベルを選択";
+}
+
+function updateLabelOptionState() {
+  const selected = new Set(selectedLabels.map(labelKey));
+  labelOptions.querySelectorAll("input[type=checkbox]").forEach((checkbox) => {
+    const input = checkbox;
+    const key = labelKey(input.value);
+    input.checked = selected.has(key);
+    input.disabled = selectedLabels.length >= MAX_LABEL_SELECTIONS && !input.checked;
+  });
+}
+
+function toggleLabel(name, checked) {
+  const key = labelKey(name);
+  const index = selectedLabels.findIndex((label) => labelKey(label) === key);
+  if (checked) {
+    if (index >= 0) return;
+    if (selectedLabels.length >= MAX_LABEL_SELECTIONS) return;
+    selectedLabels = [...selectedLabels, name];
+  } else if (index >= 0) {
+    selectedLabels = selectedLabels.filter((_, currentIndex) => currentIndex !== index);
+  }
+  renderSelectedLabels();
+  updateLabelOptionState();
+}
+
+function renderLabelOptions() {
+  labelOptions.replaceChildren();
+  for (const name of availableLabels) {
+    const option = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = name;
+    checkbox.addEventListener("change", () => toggleLabel(name, checkbox.checked));
+    option.append(checkbox, document.createTextNode(name));
+    labelOptions.append(option);
+  }
+  labelToggle.disabled = availableLabels.length === 0;
+  if (!availableLabels.length) {
+    labelOptions.hidden = true;
+    labelToggle.setAttribute("aria-expanded", "false");
+  }
+  updateLabelOptionState();
+  renderSelectedLabels();
+}
+
+async function loadLabels() {
+  try {
+    const settings = await chrome.storage.local.get(["apiUrl", "apiKey"]);
+    if (!settings.apiUrl || !settings.apiKey) return;
+    const endpoint = captureEndpoint(settings.apiUrl);
+    const response = await fetch(endpoint, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${settings.apiKey}` },
+      credentials: "omit",
+      redirect: "error",
+    });
+    let result = null;
+    try {
+      result = await response.json();
+    } catch {
+      result = null;
+    }
+    if (!response.ok || !result || !Array.isArray(result.labels)) {
+      throw new Error("labels_unavailable");
+    }
+    availableLabels = normalizeLabels(result.labels.map((value) => {
+      if (typeof value === "string") return value;
+      if (value && typeof value === "object" && typeof value.name === "string") return value.name;
+      return "";
+    }));
+    renderLabelOptions();
+    if (!availableLabels.length) showLabelStatus("既存ラベルはありません。");
+  } catch {
+    showLabelStatus("既存ラベルを読み込めませんでした。");
+  }
+}
+
+function readPageMetadata() {
+  const readMeta = (selectors) => {
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      const content = element?.getAttribute("content")?.trim();
+      if (content) return content;
+    }
+    return "";
+  };
+  const resolveHttpUrl = (value) => {
+    if (!value) return "";
+    try {
+      const resolved = new URL(value, location.href);
+      return resolved.protocol === "http:" || resolved.protocol === "https:" ? resolved.href : "";
+    } catch {
+      return "";
+    }
+  };
+  const title = readMeta([
+    'meta[property="og:title"]',
+    'meta[name="og:title"]',
+    'meta[property="twitter:title"]',
+    'meta[name="twitter:title"]',
+  ]) || document.title || "";
+  const description = readMeta([
+    'meta[property="og:description"]',
+    'meta[name="og:description"]',
+    'meta[property="twitter:description"]',
+    'meta[name="twitter:description"]',
+    'meta[name="description"]',
+    'meta[property="description"]',
+  ]);
+  const resolveFirstHttpUrl = (selectors) => {
+    for (const selector of selectors) {
+      const resolved = resolveHttpUrl(readMeta([selector]));
+      if (resolved) return resolved;
+    }
+    return "";
+  };
+  const image = resolveFirstHttpUrl([
+    'meta[property="og:image"]',
+    'meta[name="og:image"]',
+    'meta[property="og:image:secure_url"]',
+    'meta[name="og:image:secure_url"]',
+    'meta[property="og:image:url"]',
+    'meta[name="og:image:url"]',
+    'meta[property="twitter:image"]',
+    'meta[name="twitter:image"]',
+    'meta[property="twitter:image:src"]',
+    'meta[name="twitter:image:src"]',
+  ]);
+  return { title, description, image, hostname: location.hostname || "" };
+}
+
+async function loadPage() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    title.value = limitText(typeof tab?.title === "string" ? tab.title : "", 300);
+    url.value = typeof tab?.url === "string" ? tab.url : "";
+    pagePreview = { title: title.value, description: "", image: "", hostname: pageHostname(url.value) };
+    save.disabled = true;
+    if (!tab?.id || !isHttpUrl(url.value)) {
+      setSaveEnabled();
+      return;
+    }
+
+    try {
+      const [injected] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: readPageMetadata });
+      const metadata = injected?.result;
+      if (metadata && typeof metadata === "object") {
+        const metadataTitle = limitText(metadata.title, 300);
+        const metadataDescription = limitText(metadata.description, 500);
+        const metadataImage = isHttpUrl(metadata.image) ? limitText(metadata.image, 2000) : "";
+        const metadataHostname = limitText(metadata.hostname, 255);
+        if (metadataTitle) title.value = metadataTitle;
+        pagePreview = {
+          title: metadataTitle || title.value,
+          description: metadataDescription,
+          image: metadataImage,
+          hostname: metadataHostname || pageHostname(url.value),
+        };
+      }
+    } catch {
+      // Restricted pages and pages that change during injection still keep the tab title and URL.
+    }
+    setSaveEnabled();
+  } catch {
+    save.disabled = true;
+    showStatus("現在のページを読み取れませんでした。", true);
+  }
 }
 
 function clearImage() {
@@ -45,21 +292,37 @@ function setImage(file) {
   showStatus("");
 }
 
-chrome.tabs.query({ active: true, lastFocusedWindow: true }).then(([tab]) => {
-  title.value = (tab?.title ?? "").slice(0, 300);
-  url.value = tab?.url ?? "";
-  if (!/^https?:\/\//.test(url.value)) {
-    showStatus("このページのURLは保存できません。", true);
-  } else {
-    save.disabled = false;
-  }
-}).catch(() => {
-  save.disabled = true;
-  showStatus("現在のページを読み取れませんでした。", true);
+function hideSavedNoteLink() {
+  savedNoteUrl = "";
+  openNote.hidden = true;
+}
+
+labelToggle.addEventListener("click", () => {
+  if (labelToggle.disabled) return;
+  const expanded = labelToggle.getAttribute("aria-expanded") === "true";
+  labelToggle.setAttribute("aria-expanded", String(!expanded));
+  labelOptions.hidden = expanded;
 });
+document.addEventListener("click", (event) => {
+  if (!labelPicker.contains(event.target)) {
+    labelToggle.setAttribute("aria-expanded", "false");
+    labelOptions.hidden = true;
+  }
+});
+
+void loadPage();
+void loadLabels();
 
 document.getElementById("openOptions").addEventListener("click", () => chrome.runtime.openOptionsPage());
 document.getElementById("removeImage").addEventListener("click", clearImage);
+openNote.addEventListener("click", async () => {
+  if (!savedNoteUrl) return;
+  try {
+    await chrome.tabs.create({ url: savedNoteUrl });
+  } catch {
+    showStatus("MyKeepを開けませんでした。", true);
+  }
+});
 imageFile.addEventListener("change", () => {
   const file = imageFile.files?.[0];
   if (file) setImage(file);
@@ -78,20 +341,25 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (save.disabled) return;
   save.disabled = true;
+  hideSavedNoteLink();
   showStatus("保存中…");
   try {
     const settings = await chrome.storage.local.get(["apiUrl", "apiKey"]);
     if (!settings.apiUrl || !settings.apiKey) throw new Error("設定で API URL と API KEY を保存してください。");
     const endpoint = captureEndpoint(settings.apiUrl);
-    const pageUrl = new URL(url.value);
-    if (!/^https?:$/.test(pageUrl.protocol) || url.value.length > 2000) {
+    if (!isHttpUrl(url.value) || url.value.length > 2000) {
       throw new Error("このページのURLは保存できません。");
     }
 
     const data = new FormData();
-    data.set("title", title.value);
+    data.set("title", limitText(title.value, 300));
     data.set("url", url.value);
     data.set("body", body.value);
+    data.set("labels", JSON.stringify(selectedLabels));
+    data.set("preview_title", limitText(pagePreview.title || title.value, 300));
+    data.set("preview_description", limitText(pagePreview.description, 500));
+    data.set("preview_image", limitText(pagePreview.image, 2000));
+    data.set("preview_hostname", limitText(pagePreview.hostname || pageHostname(url.value), 255));
     if (selectedImage) data.set("image", selectedImage, selectedImage.name || "pasted.png");
     const response = await fetch(endpoint, {
       method: "POST",
@@ -100,14 +368,28 @@ form.addEventListener("submit", async (event) => {
       credentials: "omit",
       redirect: "error",
     });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "保存できませんでした。");
+    let result = null;
+    try {
+      result = await response.json();
+    } catch {
+      result = null;
+    }
+    if (!response.ok) throw new Error(result?.error || "保存できませんでした。");
     body.value = "";
     clearImage();
+    const noteId = result?.note?.id;
+    if (typeof noteId === "string" && noteId.trim()) {
+      try {
+        savedNoteUrl = noteUrlFromCaptureEndpoint(endpoint, noteId);
+        openNote.hidden = false;
+      } catch {
+        hideSavedNoteLink();
+      }
+    }
     showStatus("保存しました。");
   } catch (error) {
     showStatus(error instanceof Error ? error.message : "送信できませんでした。", true);
   } finally {
-    save.disabled = !/^https?:\/\//.test(url.value);
+    setSaveEnabled();
   }
 });

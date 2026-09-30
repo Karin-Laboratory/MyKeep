@@ -48,6 +48,23 @@ function keepTimestamp(value: unknown): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+function webLinks(value: unknown): Array<{ url: string; title: string; description: string; hostname: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const item = value as Record<string, unknown>;
+    if (item.source !== "WEBLINK" || typeof item.url !== "string" || item.url.length > 2000) return [];
+    try {
+      const url = new URL(item.url.trim());
+      if (url.protocol !== "http:" && url.protocol !== "https:") return [];
+      return [{ url: url.href, hostname: url.hostname,
+        title: typeof item.title === "string" ? item.title.trim().slice(0, 300) : "",
+        description: typeof item.description === "string" ? item.description.trim().slice(0, 500) : "",
+      }];
+    } catch { return []; }
+  });
+}
+
 export function parseKeepNote(value: unknown, hasAttachments = false): KeepImportNote | "skip" | "fail" {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "fail";
   const source = value as Record<string, unknown>;
@@ -77,7 +94,8 @@ export function parseKeepNote(value: unknown, hasAttachments = false): KeepImpor
     }).filter((name, index, all) => all.findIndex((other) => other.toLowerCase() === name.toLowerCase()) === index)
     : [];
   if (checklist.length > 500 || labels.length > 50) return "fail";
-  if (!title.trim() && !body.trim() && !checklist.length && !hasAttachments && source.isTrashed !== true) return "skip";
+  const links = webLinks(source.annotations);
+  if (!title.trim() && !body.trim() && !checklist.length && !hasAttachments && !links.length && source.isTrashed !== true) return "skip";
 
   const created = keepTimestamp(source.createdTimestampUsec);
   const updated = keepTimestamp(source.userEditedTimestampUsec);
@@ -94,8 +112,13 @@ export function parseKeepNote(value: unknown, hasAttachments = false): KeepImpor
     }
   }
 
+  const annotation = links.find((link) => url && link.url === new URL(url).href) ?? links[0];
+  if (annotation) url = annotation.url;
+
   return {
     title, body, url, pinned, archived, color: "default", checklist, labels,
+    preview_title: annotation?.title ?? "", preview_description: annotation?.description ?? "",
+    preview_image: "", preview_hostname: annotation?.hostname ?? "",
     created_at: created ?? updated!, updated_at: updated ?? created!,
   };
 }

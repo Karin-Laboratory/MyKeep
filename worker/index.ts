@@ -1,8 +1,8 @@
 import { NOTE_COLORS } from "../src/types";
 import { linkPreview } from "./linkPreview";
-import type { Attachment, ChecklistItem, Note, NoteColor, NoteInput } from "../src/types";
+import type { Attachment, ChecklistItem, Note, NoteColor, NoteInput, NotePreview } from "../src/types";
 
-interface NoteRow {
+interface NoteRow extends NotePreview {
   id: string;
   title: string;
   body: string;
@@ -37,7 +37,7 @@ interface LabelRow {
   name: string;
 }
 
-const SELECT_NOTE = "SELECT id, title, body, url, pinned, archived, color, deleted_at, created_at, updated_at FROM notes";
+const SELECT_NOTE = "SELECT id, title, body, url, pinned, archived, color, deleted_at, created_at, updated_at, preview_title, preview_description, preview_image, preview_hostname FROM notes";
 const PAGE_SIZE = 50;
 const MAX_SEARCH_LENGTH = 200;
 const MAX_CHECKLIST_ITEMS = 500;
@@ -179,7 +179,24 @@ function parseInput(value: unknown, current?: NoteRow, allowEmpty = false): Note
       return null;
     }
   }
-  return { title, body, url, pinned, archived, color: color as NoteColor, checklist, labels };
+  const preview: NotePreview = { preview_title: "", preview_description: "", preview_image: "", preview_hostname: "" };
+  const limits = { preview_title: 300, preview_description: 500, preview_image: 2000, preview_hostname: 255 };
+  for (const field of Object.keys(limits) as Array<keyof NotePreview>) {
+    const value = input[field] === undefined ? current?.[field] ?? "" : input[field];
+    if (typeof value !== "string" || value.length > limits[field]) return null;
+    preview[field] = value.trim();
+  }
+  if (preview.preview_image) {
+    try {
+      if (!["http:", "https:"].includes(new URL(preview.preview_image).protocol)) return null;
+    } catch { return null; }
+  }
+  if (!url || (current && current.url !== url)) {
+    for (const field of Object.keys(preview) as Array<keyof NotePreview>) preview[field] = "";
+  } else if (Object.values(preview).some(Boolean)) {
+    preview.preview_hostname = new URL(url).hostname;
+  }
+  return { title, body, url, pinned, archived, color: color as NoteColor, checklist, labels, ...preview };
 }
 
 async function withRelations(rows: NoteRow[], env: Env): Promise<Note[]> {
@@ -278,7 +295,7 @@ async function exportCounts(env: Env): Promise<Response> {
   return json({ notes: counts?.notes ?? 0, attachments: counts?.attachments ?? 0 });
 }
 
-function relationStatements(noteId: string, input: NoteInput, env: Env, replace: boolean): D1PreparedStatement[] {
+function relationStatements(noteId: string, input: NoteInput, env: Env, replace: boolean, existingLabelsOnly = false): D1PreparedStatement[] {
   const statements: D1PreparedStatement[] = [];
   if (input.checklist !== undefined) {
     if (replace) statements.push(env.DB.prepare("DELETE FROM checklist_items WHERE note_id = ?").bind(noteId));
@@ -295,8 +312,10 @@ function relationStatements(noteId: string, input: NoteInput, env: Env, replace:
     if (replace) statements.push(env.DB.prepare("DELETE FROM note_labels WHERE note_id = ?").bind(noteId));
     if (input.labels.length) {
       const placeholders = input.labels.map(() => "(?, ?)").join(",");
-      statements.push(env.DB.prepare(`INSERT OR IGNORE INTO labels (name_key, name) VALUES ${placeholders}`)
-        .bind(...input.labels.flatMap((name) => [labelKey(name), name])));
+      if (!existingLabelsOnly) {
+        statements.push(env.DB.prepare(`INSERT OR IGNORE INTO labels (name_key, name) VALUES ${placeholders}`)
+          .bind(...input.labels.flatMap((name) => [labelKey(name), name])));
+      }
       statements.push(env.DB.prepare(`INSERT INTO note_labels (note_id, label_key) VALUES ${placeholders}`)
         .bind(...input.labels.flatMap((name) => [noteId, labelKey(name)])));
     }
@@ -304,15 +323,16 @@ function relationStatements(noteId: string, input: NoteInput, env: Env, replace:
   return statements;
 }
 
-async function insertNote(input: NoteInput, env: Env, timestamps?: { created_at: string; updated_at: string }, deletedAt: string | null = null): Promise<Note> {
+async function insertNote(input: NoteInput, env: Env, timestamps?: { created_at: string; updated_at: string }, deletedAt: string | null = null, existingLabelsOnly = false): Promise<Note> {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const createdAt = timestamps?.created_at ?? now;
   const updatedAt = timestamps?.updated_at ?? now;
   const statements = [env.DB.prepare(
-    "INSERT INTO notes (id, title, body, url, pinned, archived, color, deleted_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  ).bind(id, input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, deletedAt, createdAt, updatedAt),
-  ...relationStatements(id, input, env, false)];
+    "INSERT INTO notes (id, title, body, url, pinned, archived, color, deleted_at, created_at, updated_at, preview_title, preview_description, preview_image, preview_hostname) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).bind(id, input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, deletedAt, createdAt, updatedAt,
+    input.preview_title ?? "", input.preview_description ?? "", input.preview_image ?? "", input.preview_hostname ?? ""),
+  ...relationStatements(id, input, env, false, existingLabelsOnly)];
   await env.DB.batch(statements);
   const row = await env.DB.prepare(`${SELECT_NOTE} WHERE id = ?`).bind(id).first<NoteRow>();
   return (await withRelations([row!], env))[0];
@@ -322,6 +342,12 @@ async function createNote(request: Request, env: Env): Promise<Response> {
   const input = parseInput(await readInput(request));
   if (!input) return json({ error: "メモの内容を確認してください。" }, 400);
   return json({ note: await insertNote(input, env) }, 201);
+}
+
+async function getNote(id: string, env: Env): Promise<Response> {
+  const row = await env.DB.prepare(`${SELECT_NOTE} WHERE id = ?`).bind(id).first<NoteRow>();
+  if (!row) return json({ error: "メモが見つかりません。" }, 404);
+  return json({ note: (await withRelations([row], env))[0] });
 }
 
 async function importKeepNote(request: Request, env: Env): Promise<Response> {
@@ -348,8 +374,9 @@ async function updateNote(id: string, request: Request, env: Env): Promise<Respo
 
   const now = new Date().toISOString();
   await env.DB.batch([env.DB.prepare(
-    "UPDATE notes SET title = ?, body = ?, url = ?, pinned = ?, archived = ?, color = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
-  ).bind(input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, now, id),
+    "UPDATE notes SET title = ?, body = ?, url = ?, pinned = ?, archived = ?, color = ?, updated_at = ?, preview_title = ?, preview_description = ?, preview_image = ?, preview_hostname = ? WHERE id = ? AND deleted_at IS NULL",
+  ).bind(input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, now,
+    input.preview_title, input.preview_description, input.preview_image, input.preview_hostname, id),
   ...relationStatements(id, input, env, true)]);
   const row = await env.DB.prepare(`${SELECT_NOTE} WHERE id = ?`).bind(id).first<NoteRow>();
   return json({ note: (await withRelations([row!], env))[0] });
@@ -459,13 +486,18 @@ async function uploadAttachment(noteId: string, request: Request, env: Env): Pro
   return json({ attachment: await persistAttachment(noteId, filename, mime, bytes, env) }, 201);
 }
 
-async function captureNote(request: Request, env: Env): Promise<Response> {
+async function captureApi(request: Request, env: Env): Promise<Response> {
   const secret = (env as Env & { CAPTURE_API_KEY?: string }).CAPTURE_API_KEY;
   if (!secret) return json({ error: "保存APIが設定されていません。" }, 503);
   if (!await matchesApiKey(request.headers.get("Authorization"), secret)) {
     return json({ error: "API KEYが正しくありません。" }, 401);
   }
+  if (request.method === "GET") return listLabels(env);
+  if (request.method === "POST") return captureNote(request, env);
+  return json({ error: "このメソッドには対応していません。" }, 405);
+}
 
+async function captureNote(request: Request, env: Env): Promise<Response> {
   const contentType = request.headers.get("Content-Type") ?? "";
   if (!contentType.toLowerCase().startsWith("multipart/form-data;")) {
     return json({ error: "送信形式が正しくありません。" }, 415);
@@ -486,8 +518,25 @@ async function captureNote(request: Request, env: Env): Promise<Response> {
   if (typeof title !== "string" || typeof url !== "string" || !url || typeof body !== "string") {
     return json({ error: "メモの内容を確認してください。" }, 400);
   }
-  const input = parseInput({ title, url, body, pinned: false, archived: false, color: "default" });
+  let labels: unknown = [];
+  if (form.has("labels")) {
+    const value = form.get("labels");
+    if (typeof value !== "string" || value.length > 20_000) return json({ error: "ラベルを確認してください。" }, 400);
+    try { labels = JSON.parse(value); } catch { return json({ error: "ラベルを確認してください。" }, 400); }
+  }
+  const input = parseInput({ title, url, body, pinned: false, archived: false, color: "default", labels,
+    preview_title: form.get("preview_title") ?? "",
+    preview_description: form.get("preview_description") ?? "",
+    preview_image: form.get("preview_image") ?? "",
+    preview_hostname: form.get("preview_hostname") ?? "",
+  });
   if (!input) return json({ error: "メモの内容を確認してください。" }, 400);
+  if (input.labels?.length) {
+    const keys = input.labels.map(labelKey);
+    const result = await env.DB.prepare(`SELECT name_key FROM labels WHERE name_key IN (${keys.map(() => "?").join(",")})`)
+      .bind(...keys).all<{ name_key: string }>();
+    if ((result.results ?? []).length !== keys.length) return json({ error: "登録済みのラベルだけを選択してください。" }, 400);
+  }
 
   const images = form.getAll("image");
   if (images.length > 1) return json({ error: "画像は1枚だけ選んでください。" }, 400);
@@ -506,7 +555,7 @@ async function captureNote(request: Request, env: Env): Promise<Response> {
     imageBytes = new Uint8Array(await image.arrayBuffer());
   }
 
-  const note = await insertNote(input, env);
+  const note = await insertNote(input, env, undefined, null, true);
   if (imageBytes) {
     try {
       note.attachments.push(await persistAttachment(note.id, filename, mime, imageBytes, env));
@@ -559,8 +608,8 @@ export default {
     if (!url.pathname.startsWith("/api/")) return json({ error: "見つかりません。" }, 404);
 
     try {
-      if (url.pathname === "/api/capture" && request.method === "POST") {
-        return await captureNote(request, env);
+      if (url.pathname === "/api/capture") {
+        return await captureApi(request, env);
       }
 
       if (url.pathname === "/api/link-preview" && request.method === "GET") {
@@ -617,6 +666,7 @@ export default {
 
       const match = /^\/api\/notes\/([0-9a-f-]{36})$/.exec(url.pathname);
       if (match) {
+        if (request.method === "GET") return await getNote(match[1], env);
         if (request.method === "PATCH") return await updateNote(match[1], request, env);
         if (request.method === "DELETE") return await moveToTrash(match[1], env);
       }

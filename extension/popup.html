@@ -13,9 +13,18 @@
       <button id="openOptions" type="button" class="text-button">設定</button>
     </header>
     <form id="captureForm">
-      <label>タイトル<input id="title" type="text" readonly /></label>
-      <label>URL<input id="url" type="url" readonly /></label>
-      <label>メモ<textarea id="body" rows="4" placeholder="任意のメモ"></textarea></label>
+      <label>タイトル<input id="title" type="text" maxlength="300" readonly /></label>
+      <label>URL<input id="url" type="url" maxlength="2000" readonly /></label>
+      <label>メモ<textarea id="body" rows="4" maxlength="100000" placeholder="任意のメモ"></textarea></label>
+      <section class="labels-field" aria-labelledby="labelsHeading">
+        <span id="labelsHeading" class="field-label">ラベル</span>
+        <div class="label-picker">
+          <button id="labelToggle" type="button" class="label-picker-toggle" aria-expanded="false" aria-controls="labelOptions" disabled>ラベルを選択</button>
+          <div id="labelOptions" class="label-picker-menu" hidden></div>
+        </div>
+        <div id="selectedLabels" class="selected-labels" aria-live="polite"></div>
+        <p id="labelStatus" class="label-status" role="status" aria-live="polite"></p>
+      </section>
       <label>画像<input id="imageFile" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" /></label>
       <div id="pasteArea" tabindex="0">画像はここで Ctrl+V でも貼り付けできます</div>
       <div id="imagePreview" hidden>
@@ -25,6 +34,7 @@
       </div>
       <p id="status" role="status" aria-live="polite"></p>
       <button id="save" type="submit" class="primary" disabled>保存</button>
+      <button id="openNote" type="button" class="secondary" hidden>MyKeepで表示</button>
     </form>
   </body>
 </html>

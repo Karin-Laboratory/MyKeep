@@ -35,6 +35,8 @@ Chrome で `chrome://extensions` を開き、デベロッパーモードを有�
 
 ツールバーのアイコンを押すと現在ページのタイトルと URL が入ります。メモは任意です。画像は1枚まで、Ctrl+V またはファイル選択で追加して「保存」を押します。対応形式と20MB制限はWeb本体と同じです。
 
+拡張 v0.2.0 は現在タブの DOM から Open Graph / Twitter Card のタイトル・説明・画像とドメインを取得して保存します。取得できないページでも通常のタイトル・URLで保存できます。登録済みラベルは Bearer 認証付きの `GET /api/capture` から取得し、最大50件を複数選択できます。拡張では新規ラベルを作成しません。保存後の「MyKeepで表示」は `/?note=メモID` を新しいタブで開き、対象メモの編集画面を表示します。拡張を更新したら `chrome://extensions` で再読み込みしてください。
+
 ローカルで試す場合は、Git管理外の `.dev.vars` に `CAPTURE_API_KEY` を設定し、API URL に `http://127.0.0.1:8787/api/capture` を指定します。APIキーをソースコードや D1 に保存しないでください。
 
 ## Google Keep Import（Phase 6A・6B-1・6B-2）
@@ -43,6 +45,8 @@ Chrome で `chrome://extensions` を開き、デベロッパーモードを有�
 
 Keep JSON の `listContent` から項目のテキスト・チェック状態・配列順を、`labels[].name` からラベルを取り込みます。チェックリストだけのメモも対象です。形式が不正な個別項目・ラベルは読み飛ばし、1メモの上限を超える場合はそのメモを失敗件数に含めます。
 
+`annotations` の `source: "WEBLINK"` から有効な HTTP(S) URL・タイトル・説明・ドメインを復元します。本文URLと一致する項目を優先し、一致しなければ最初の有効な項目を使います。本文URLが壊れていても annotation のURLを利用できます。取り込み中に外部ページの取得は行いません。保存済みプレビューは項目ごとに動的プレビューより優先し、URLを編集すると古いプレビューを消去します。
+
 Keep JSON の `attachments[].filePath` を、同じ Keep フォルダ内の ZIP エントリへ照合します。画像は既存の表示・R2保存を使い、それ以外の添付はダウンロードできます。添付が見つからない場合や20MBを超える場合は、その添付だけスキップします。ゴミ箱内のメモと、添付もチェックリストもない空のメモはスキップします。再実行時の重複判定はありません。
 
 ## 全データのエクスポート（Phase 7）
@@ -50,6 +54,8 @@ Keep JSON の `attachments[].filePath` を、同じ Keep フォルダ内の ZIP 
 「全データをエクスポート」を押すと、メモ・アーカイブ・ゴミ箱を50件ずつ取得し、添付ファイルを1件ずつ読み込んでブラウザでZIPを作ります。ZIPには `notes.json`、`markdown/note-000001.md` などの読みやすいメモ、`attachments/` 内の画像・PDF等が入ります。同名の添付はID付きの一意なファイル名にします。添付取得に失敗した場合も続行し、`notes.json` の該当添付の `zip_path` は `null` になります。
 
 保存先を直接選べるブラウザではZIPをファイルへ順次書き込みます。それ以外のブラウザでは完成したZIPをメモリ上のBlobとしてダウンロードするため、大きなバックアップでは端末の空きメモリが必要です。エクスポート中は他の端末・タブでメモを変更しないでください。
+
+`notes.json` には保存済みプレビューの `preview_title` / `preview_description` / `preview_image` / `preview_hostname` も含めます。
 
 ## Cloudflare へのデプロイ準備
 
@@ -66,6 +72,8 @@ Keep JSON の `attachments[].filePath` を、同じ Keep フォルダ内の ZIP 
 **Access の保護と `/api/capture` のAPIキー認証を確認するまで個人データを保存しないでください。** 通常のWeb APIと画像はWebと同じWorker経由で提供し、Accessで保護します。`/api/capture` はAccessの例外パスになるため、APIキーが必須です。
 
 ## 継続デプロイ
+
+プレビュー保存を有効にする `0005_note_previews.sql` は既存データを保持して4つのTEXTカラムを追加します。新コードの自動デプロイ前に `npx wrangler d1 migrations apply mykeep --remote` で本番D1へ適用してください。通常のpushではマイグレーションは自動適用されません。
 
 既存の `mykeep` Worker は Cloudflare Workers Builds で GitHub の `kishi27/MyKeep` に接続しています。`main` への push で自動的に `npm run build` と `npx wrangler deploy` が実行されます。ルートディレクトリは `/`、プレビュービルドは無効です。結果は Cloudflare の **Workers & Pages → mykeep → デプロイ** で確認します。手動で再デプロイする場合は `npm run deploy` を使用します。
 

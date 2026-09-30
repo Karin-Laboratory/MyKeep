@@ -1,3 +1,5 @@
+import type { Note } from "./types";
+
 export interface LinkPreview {
   title: string;
   description: string;
@@ -5,14 +7,40 @@ export interface LinkPreview {
   hostname: string;
 }
 
-export function displayLinkTitle(preview: LinkPreview, noteTitle: string): string {
+function meaningfulTitle(preview: LinkPreview): boolean {
   const title = preview.title.trim();
   const hostname = preview.hostname.trim();
   const normalizedTitle = title.toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
   const normalizedHost = hostname.toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
   const genericVideoTitles = ["youtube", "youtube.com", "instagram", "instagram.com", "dailymotion", "dailymotion.com"];
-  return title && normalizedTitle !== normalizedHost && !genericVideoTitles.includes(normalizedTitle)
-    ? title : noteTitle.trim() || hostname;
+  return !!title && normalizedTitle !== normalizedHost && !genericVideoTitles.includes(normalizedTitle);
+}
+
+export function displayLinkTitle(preview: LinkPreview, noteTitle: string): string {
+  return meaningfulTitle(preview) ? preview.title.trim() : noteTitle.trim() || preview.hostname;
+}
+
+export function mergeLinkPreview(note: Note, dynamic?: LinkPreview | null): LinkPreview | null {
+  const saved = {
+    title: note.preview_title || "", description: note.preview_description || "",
+    image: note.preview_image || "", hostname: note.preview_hostname || "",
+  };
+  const hasSaved = Object.values(saved).some(Boolean);
+  if (!hasSaved && !dynamic) return null;
+  // Instagramの汎用タイトルだけの場合は従来のURL表示を維持する。
+  if (!hasSaved && dynamic && /(^|\.)instagram\.com$/i.test(dynamic.hostname)
+    && !dynamic.image && !dynamic.description && !meaningfulTitle(dynamic)) return null;
+  let hostname = saved.hostname || dynamic?.hostname || "";
+  if (!hostname) {
+    try { hostname = new URL(note.url).hostname; } catch { /* URLのないメモにはプレビューを表示しない。 */ }
+  }
+  return {
+    title: meaningfulTitle({ ...saved, hostname }) ? saved.title
+      : dynamic && meaningfulTitle(dynamic) ? dynamic.title : note.title.trim() || hostname,
+    description: saved.description || dynamic?.description || "",
+    image: saved.image || dynamic?.image || "",
+    hostname,
+  };
 }
 
 const cache = new Map<string, Promise<LinkPreview | null>>();

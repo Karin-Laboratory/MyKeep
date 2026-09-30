@@ -5,7 +5,7 @@ import { backupFileName, createBackup } from "./exportBackup";
 import type { BackupProgress, BackupResult } from "./exportBackup";
 import { readKeepZip } from "./keepImport";
 import type { KeepZipResult } from "./keepImport";
-import { displayLinkTitle, getLinkPreview } from "./linkPreview";
+import { displayLinkTitle, getLinkPreview, mergeLinkPreview } from "./linkPreview";
 import type { LinkPreview } from "./linkPreview";
 import { NOTE_COLORS } from "./types";
 import type { Attachment, ChecklistInput, Note, NoteColor, NoteInput } from "./types";
@@ -142,6 +142,35 @@ export default function App() {
   const notesRef = useRef(notes);
   const lastListPathRef = useRef("");
   const refreshingRef = useRef(false);
+  const deepLinkNoteRef = useRef(new URL(window.location.href).searchParams.get("note"));
+
+  useEffect(() => {
+    const id = deepLinkNoteRef.current;
+    if (!id) return;
+    const controller = new AbortController();
+    const clearLink = () => {
+      deepLinkNoteRef.current = null;
+      const url = new URL(window.location.href);
+      url.searchParams.delete("note");
+      window.history.replaceState(window.history.state, "", url);
+    };
+    api<{ note: Note }>(`/api/notes/${encodeURIComponent(id)}`, { signal: controller.signal })
+      .then(({ note }) => {
+        if (controller.signal.aborted) return;
+        if (note.deleted_at) {
+          setView("trash");
+        } else {
+          openEditor(note);
+        }
+        clearLink();
+      })
+      .catch((cause) => {
+        if (controller.signal.aborted) return;
+        setError(cause instanceof Error ? cause.message : "メモが見つかりません。");
+        clearLink();
+      });
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => { notesRef.current = notes; }, [notes]);
   useEffect(() => { pendingImagesRef.current = pendingImages; }, [pendingImages]);
@@ -691,11 +720,7 @@ export default function App() {
   const otherNotes = notes.filter((note) => !note.pinned);
 
   function renderNoteCard(note: Note) {
-    const preview = richLinkPreview ? previews[note.url] : null;
-    const instagramTitle = preview?.title.trim().toLowerCase().replace(/^www\./, "");
-    const showUrl = preview && /(^|\.)instagram\.com$/i.test(preview.hostname)
-      && !preview.image && !preview.description && ["", "instagram", "instagram.com"].includes(instagramTitle ?? "");
-    const visiblePreview = showUrl ? null : preview;
+    const visiblePreview = richLinkPreview ? mergeLinkPreview(note, previews[note.url]) : null;
     return (
       <article className="card" data-color={note.color} key={note.id}>
         {view === "trash"

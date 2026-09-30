@@ -17,3 +17,14 @@ export function hostPermissionPattern(endpoint) {
   const url = new URL(endpoint);
   return `${url.protocol}//${url.hostname}/*`;
 }
+
+export function noteUrlFromCaptureEndpoint(value, noteId) {
+  const endpoint = captureEndpoint(value);
+  if (typeof noteId !== "string" || !noteId.trim() || noteId.length > 200) {
+    throw new Error("保存したメモのIDを確認できませんでした。");
+  }
+  const origin = new URL(endpoint).origin;
+  const noteUrl = new URL(`${origin}/`);
+  noteUrl.searchParams.set("note", noteId);
+  return noteUrl.href;
+}
