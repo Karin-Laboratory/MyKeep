@@ -45,6 +45,20 @@ npm run dev
 
 Chrome拡張もローカルで試す場合は、Git管理外の `.dev.vars` に `CAPTURE_API_KEY=<自分で生成したキー>` を設定します。拡張のAPI URLは、ローカルURLに `/api/capture` を付けたものです（例：`http://127.0.0.1:8787/api/capture`）。
 
+## GitHubからForkして使う
+
+公開リポジトリを利用する場合は、**本家MyKeepを自分のGitHubアカウントへForkし、自分のForkをCloudflare Workers Buildsへ接続**してください。
+
+本家MyKeep → 自分のGitHubへFork → 自分のCloudflare Workers Builds、という構成です。
+
+1. 本家リポジトリの「Fork」から、自分のアカウントにコピーを作ります。
+2. 自分のForkをローカルへ取得し、[ローカルで起動](#ローカルで起動)・[Cloudflareへデプロイ](#cloudflareへデプロイ)の手順で自分の環境を設定します。
+3. 自動デプロイの接続先には、**本家ではなく自分のForkの `main`** を指定します。
+
+作者が本家の `main` を更新しても、Forkには自動反映されません。自分のタイミングで更新を選べ、自分で加えた変更も維持できます（競合があれば解消が必要です）。本家を直接デプロイ元にせず、作者側の更新を自分の判断なしで本番へ反映しない運用を推奨します。
+
+D1・R2・Cloudflare Access・`CAPTURE_API_KEY` は各自のCloudflare環境で用意・管理します。作者の環境とは別で、Forkしたこと自体で作者にメモ・画像・API KEYへのアクセス権が付く仕組みではありません。
+
 ## Cloudflareへデプロイ
 
 ### 初回設定
@@ -78,11 +92,22 @@ Access保護とAPIキーなし／誤ったキーでの拒否を確認してか�
 
 ### 継続デプロイ
 
-現在の運用は **GitHubの `main` へのpush → Cloudflare Workers Builds → 自動デプロイ**です。自分の環境ではCloudflare側でGitHubリポジトリを接続し、ビルドコマンドを `npm run build`、デプロイコマンドを `npx wrangler deploy` に設定します。
+現在の運用は **接続したGitHubリポジトリの `main` へのpush / merge → Cloudflare Workers Builds → 自動デプロイ**です。Fork利用者は**自分のForkの `main`** がトリガーになります。Cloudflare側で自分のForkを接続し、ビルドコマンドを `npm run build`、デプロイコマンドを `npx wrangler deploy` に設定します。
 
 `npm run deploy` はビルドを含む手動デプロイ用です。**D1マイグレーションはpushやこれらのデプロイコマンドでは自動適用されません。** 新しいマイグレーションが追加された場合は、対応コードのデプロイ前に `npx wrangler d1 migrations apply mykeep --remote` を再実行してください。
 
 ゴミ箱掃除のCronは `wrangler.jsonc` の `0 18 * * *`（毎日18:00 UTC／日本時間03:00）です。30日経過したメモは次の掃除で、R2の添付を削除してからD1のメモ・関連データを完全削除します。
+
+## MyKeepを更新する
+
+**本家に新しい更新があっても、ForkしたMyKeepは自動更新されません。** 利用者が「この更新を取り込む」と判断したときに、本家の変更をForkへ反映します。
+
+1. 更新前に、READMEの変更、`migrations/` の新しいファイル、`wrangler.jsonc` の変更、Chrome拡張のバージョン／変更、自分の修正との競合を確認します。自分のD1 IDやR2設定を本家の値で上書きしないようにしてください。
+2. 新しいmigrationがある場合は、まずその変更をローカルの作業ブランチへ取り込み、**Forkの `main` へ反映する前に**[継続デプロイ](#継続デプロイ)に記載した `npx wrangler d1 migrations apply mykeep --remote` を実行します。自動デプロイだけではD1は更新されません。
+3. GitHubの「Sync fork」で差分を確認し、「Update branch」で更新できます。`main` を更新すると自動デプロイが始まるため、必要なmigration・設定の準備を済ませてから実行してください。競合や確認が必要な変更は作業ブランチ／Pull Requestで確認・解消してから `main` へ反映します。詳細は[GitHub公式のFork同期手順](https://docs.github.com/ja/pull-requests/how-tos/work-with-forks/syncing-a-fork)を参照してください。
+4. **自分のForkの `main`** への反映後、Cloudflare Workers Buildsの結果を確認します。Chrome拡張に変更がある場合は、自分のローカルの `extension/` も更新し、Chromeで再読み込みします。
+
+本家の更新を取り込む → 内容と必要なmigrationを確認・準備 → 自分のForkの `main` へ反映 → 自分のCloudflareへ自動デプロイ、という流れです。
 
 ## 基本的な使い方
 
@@ -222,6 +247,18 @@ Manifestは `standalone` 表示を指定しています。Service Workerは画�
 - **API KEY**：32バイト以上のランダム値を推奨。Worker Secretに登録し、コード・`wrangler.jsonc`・D1・READMEへ実値を書かず、Gitへcommitしないでください。
 - **ローカル設定**：`.env*` / `.dev.vars*` は `.gitignore` 対象です。拡張のキーはChromeプロファイル内の `chrome.storage.local` に保存されます。
 - **R2**：非公開のまま使用します。添付はAccessで保護したWorker経由で配信します。外部サイトのリッチリンク画像は、そのサイトのURLから読み込まれます。
+
+## Issue / Pull Request
+
+本家GitHubのIssueでは、不具合報告・セットアップで詰まった点・改善提案・機能提案を受け付けます。バグ修正・README修正・改善コードのPull Requestも歓迎します。報告には再現手順や利用環境を添え、API KEY・Secret・個人データは載せないでください。
+
+MyKeepは個人開発プロジェクトです。IssueやPull Requestは歓迎しますが、返信・修正・採用・mergeや対応時期を保証するものではありません。
+
+### Contributing方針
+
+- Pull Requestは自動で本家の `main` へ入りません。内容を確認し、merge・修正依頼・保留・closeする場合があります。
+- DB構造・認証方式・Cloudflare構成・UIの大幅変更や大きな新機能は、実装前にIssueで相談してください。
+- PR作成後に本家の `main` が更新され、同じ箇所の変更が競合する場合があります。その際は最新の本家 `main` をPR側へ取り込み、競合解消をお願いすることがあります。
 
 ## ディレクトリ構成
 
