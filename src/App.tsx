@@ -1032,6 +1032,9 @@ export default function App() {
           <input type="search" value={search} maxLength={200} placeholder="タイトル・本文・URL" onChange={(event) => setSearch(event.target.value)} />
         </label>
         <div className="header-actions">
+          <button type="button" className={`icon-button${selecting ? " active" : ""}`} aria-label={selecting ? "選択モードを終了" : "メモを選択"}
+            title={selecting ? "選択を終了" : "選択"} aria-pressed={selecting} disabled={working || (!selecting && loading)}
+            onClick={() => { if (selecting) endSelection(); else { setSelecting(true); setBulkResult(null); } }}>☑</button>
           <button type="button" className="icon-button" aria-label="更新" title="更新" onClick={refreshCurrent}>↻</button>
           <div className="settings-menu-wrap" ref={settingsMenuRef}>
             <button type="button" className="icon-button" aria-label="設定メニュー" title="設定" aria-expanded={settingsMenuOpen} aria-haspopup="menu" onClick={() => setSettingsMenuOpen((open) => !open)}>⚙</button>
@@ -1063,9 +1066,6 @@ export default function App() {
           </div>
         </aside>
         <div className="main-content">
-      <div className="list-tools">
-        {!selecting && <button type="button" disabled={working || loading} onClick={() => { setSelecting(true); setBulkResult(null); }}>選択</button>}
-      </div>
       {bulkResult && <p className={bulkResult.failed ? "error" : "bulk-result"} role={bulkResult.failed ? "alert" : "status"}>{bulkResult.message}</p>}
       {error && !draft && <p className="error" role="alert">{error}</p>}
       {!loading && notes.length === 0 && <p className="empty">{search.trim() || labelFilter ? "該当するメモはありません。" : view === "active" ? "メモはまだありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}
