@@ -28,10 +28,71 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/avif": "avif",
 };
 const COLOR_LABELS: Record<NoteColor, string> = {
-  default: "なし", red: "赤", orange: "オレンジ", yellow: "黄", green: "緑", blue: "青", purple: "紫",
+  default: "⚪", red: "🔴", orange: "🟠", yellow: "🟡", green: "🟢", blue: "🔵", purple: "🟣",
 };
 const PREVIEW_SETTING = "mykeep.richLinkPreview";
 const DARK_SETTING = "mykeep.darkMode";
+
+function SettingsIcon() {
+  return <svg className="settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="m9 3-.6 2.4-2 .9-2.2-.7-3 5.2 1.7 1.6v2.3l-1.7 1.6 3 5.2 2.2-.7 2 .9L9 24h6l.6-2.4 2-.9 2.2.7 3-5.2-1.7-1.6v-2.3l1.7-1.6-3-5.2-2.2.7-2-.9L15 3Z" transform="translate(2 0) scale(.83)" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>;
+}
+
+function ImageViewer({ images, initialIndex, onClose }: { images: Attachment[]; initialIndex: number; onClose: () => void }) {
+  const [index, setIndex] = useState(initialIndex);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const touchRef = useRef<{ x: number; y: number } | null>(null);
+  const image = images[index];
+  function move(direction: number) {
+    setIndex((current) => (current + direction + images.length) % images.length);
+  }
+  useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus({ preventScroll: true });
+    return () => {
+      document.body.style.overflow = overflow;
+      previousFocus?.focus({ preventScroll: true });
+    };
+  }, []);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); }
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        setIndex((current) => (current + (event.key === "ArrowLeft" ? -1 : 1) + images.length) % images.length);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [images.length, onClose]);
+  return <div className="image-viewer" role="dialog" aria-modal="true" aria-label="画像ビューア"
+    onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="image-viewer-toolbar">
+      <span aria-live="polite">{index + 1} / {images.length}</span>
+      <button type="button" ref={closeRef} aria-label="画像ビューアを閉じる" title="閉じる" onClick={onClose}>×</button>
+    </div>
+    <div className="image-viewer-stage"
+      onTouchStart={(event) => { touchRef.current = event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY } : null; }}
+      onTouchEnd={(event) => {
+        const start = touchRef.current;
+        touchRef.current = null;
+        const end = event.changedTouches[0];
+        if (!start || !end || event.touches.length) return;
+        const dx = end.clientX - start.x;
+        if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(end.clientY - start.y)) move(dx < 0 ? 1 : -1);
+      }} onTouchCancel={() => { touchRef.current = null; }}>
+      <img src={image.url} alt={image.filename} draggable={false} />
+    </div>
+    <div className="image-viewer-navigation">
+      <button type="button" disabled={images.length < 2} onClick={() => move(-1)} aria-label="前の画像">← 前</button>
+      <button type="button" disabled={images.length < 2} onClick={() => move(1)} aria-label="次の画像">次 →</button>
+    </div>
+  </div>;
+}
 
 function labelKey(name: string): string {
   return name.trim().normalize("NFC").toLowerCase();
@@ -178,6 +239,7 @@ export default function App() {
   const [creatingLabel, setCreatingLabel] = useState(false);
   const [newLabelName, setNewLabelName] = useState("");
   const [editorAttachments, setEditorAttachments] = useState<Attachment[]>([]);
+  const [viewerImageId, setViewerImageId] = useState<string | null>(null);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [draggingImage, setDraggingImage] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -396,6 +458,7 @@ export default function App() {
   }
 
   function closeEditor() {
+    setViewerImageId(null);
     clearPendingImages();
     setDraft(null);
     setLabelMenuOpen(false);
@@ -404,6 +467,7 @@ export default function App() {
   }
 
   function openEditor(note?: Note) {
+    setViewerImageId(null);
     setError("");
     clearPendingImages();
     setEditingId(note?.id ?? null);
@@ -1034,6 +1098,7 @@ export default function App() {
     all.findIndex((candidate) => labelKey(candidate) === labelKey(name)) === index);
   const deleteLabelNames = availableLabels.filter((name) => labelsToDelete.includes(labelKey(name)));
   const labelManagerBusy = deletingLabels || creatingStandaloneLabel || renamingLabel || working || undoing;
+  const viewerImages = editorAttachments.filter((attachment) => IMAGE_TYPES.includes(attachment.mime_type));
   const pinnedNotes = notes.filter((note) => note.pinned);
   const otherNotes = notes.filter((note) => !note.pinned);
   const selectedActiveCount = notes.filter((note) => selectedNoteIds.has(note.id) && !note.archived).length;
@@ -1099,7 +1164,7 @@ export default function App() {
             onClick={() => { if (selecting) endSelection(); else { setSelecting(true); setBulkResult(null); } }}>☑</button>
           <button type="button" className="icon-button" aria-label="更新" title="更新" onClick={refreshCurrent}>↻</button>
           <div className="settings-menu-wrap" ref={settingsMenuRef}>
-            <button type="button" className="icon-button" aria-label="設定メニュー" title="設定" aria-expanded={settingsMenuOpen} aria-haspopup="menu" onClick={() => setSettingsMenuOpen((open) => !open)}>⚙</button>
+            <button type="button" className="icon-button" aria-label="設定メニュー" title="設定" aria-expanded={settingsMenuOpen} aria-haspopup="menu" onClick={() => setSettingsMenuOpen((open) => !open)}><SettingsIcon /></button>
             {settingsMenuOpen && <div className="settings-dropdown" role="menu">
               <button type="button" role="menuitem" onClick={() => { setSettingsMenuOpen(false); setSettingsOpen(true); }}>設定</button>
               <button type="button" role="menuitem" onClick={() => { setSettingsMenuOpen(false); setImportOpen(true); }}>Keep Import</button>
@@ -1123,7 +1188,7 @@ export default function App() {
             <h2>ラベル</h2>
             <nav className="sidebar-nav" aria-label="ラベル">
               {availableLabels.map((name) => <button type="button" className={view === "active" && labelFilter === name ? "selected" : ""} aria-current={view === "active" && labelFilter === name ? "page" : undefined} onClick={() => selectLabel(name)} key={name}><span aria-hidden="true">🏷</span>{name}</button>)}
-              <button type="button" onClick={openLabelManager}><span aria-hidden="true">⚙</span>ラベル整理</button>
+              <button type="button" onClick={openLabelManager}><SettingsIcon />ラベル整理</button>
             </nav>
           </div>
         </aside>
@@ -1276,7 +1341,7 @@ export default function App() {
             </div>
             {error && <p className="error" role="alert">{error}</p>}
             <label>タイトル<input value={draft.title} maxLength={300} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
-            <label>本文<textarea value={draft.body} maxLength={100000} rows={4} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></label>
+            <label>本文<textarea value={draft.body} maxLength={100000} rows={3} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></label>
             <section className="checklist-editor" aria-label="チェックリスト">
               <div className="section-heading"><strong>チェックリスト</strong>
                 <button type="button" onClick={() => setDraft({ ...draft, checklist: [...draft.checklist, { text: "", checked: false }] })} disabled={draft.checklist.length >= 500}>＋ 項目を追加</button>
@@ -1318,10 +1383,10 @@ export default function App() {
               </div>}
             </section>
             <label>URL<input type="url" value={draft.url} maxLength={2000} placeholder="https://" onChange={(event) => setDraft({ ...draft, url: event.target.value })} /></label>
-            <label>色<select value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value as NoteColor })}>
+            <div className="editor-options">
+              <label className="editor-color">色<select aria-label="メモの色" value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value as NoteColor })}>
               {NOTE_COLORS.map((color) => <option value={color} key={color}>{COLOR_LABELS[color]}</option>)}
             </select></label>
-            <div className="editor-options">
               <label><input type="checkbox" checked={draft.pinned} onChange={(event) => setDraft({ ...draft, pinned: event.target.checked })} /> ピン留め</label>
               <label><input type="checkbox" checked={draft.archived} onChange={(event) => setDraft({ ...draft, archived: event.target.checked })} /> アーカイブ</label>
             </div>
@@ -1343,7 +1408,7 @@ export default function App() {
                     {editorAttachments.map((attachment) => (
                       <div className="editor-image" key={attachment.id}>
                         {IMAGE_TYPES.includes(attachment.mime_type)
-                          ? <img src={attachment.url} alt={attachment.filename} loading="lazy" />
+                          ? <button type="button" className="image-thumbnail" aria-label={`${attachment.filename}を拡大表示`} onClick={() => setViewerImageId(attachment.id)}><img src={attachment.url} alt={attachment.filename} loading="lazy" /></button>
                           : <a href={attachment.url} download={attachment.filename}>{attachment.filename}</a>}
                         <button type="button" onClick={() => removeImage(attachment)} disabled={working} aria-label={`${attachment.filename}を削除`}>削除</button>
                       </div>
@@ -1368,6 +1433,7 @@ export default function App() {
           </form>
         </div>
       )}
+      {viewerImageId && viewerImages.length > 0 && <ImageViewer images={viewerImages} initialIndex={Math.max(0, viewerImages.findIndex((image) => image.id === viewerImageId))} onClose={() => setViewerImageId(null)} />}
     </main>
   );
 }
