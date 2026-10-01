@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChangeEvent, ClipboardEvent, DragEvent, FormEvent } from "react";
 import { BlobWriter } from "@zip.js/zip.js";
 import { backupFileName, createBackup } from "./exportBackup";
@@ -20,6 +20,7 @@ type UndoAction = { message: string; undo?: () => Promise<void> };
 type BulkOperation = "archive" | "unarchive" | "trash" | "restore" | "permanent" | "addLabels" | "removeLabel";
 type BulkResult = { message: string; failed: number };
 type CreatedLabel = { label: string; created: boolean };
+type ScrollAnchor = { id: string | null; top: number; scrollY: number };
 
 const emptyNote: NoteDraft = { title: "", body: "", url: "", pinned: false, archived: false, color: "default", checklist: [] };
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -218,6 +219,9 @@ export default function App() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [pullRefreshing, setPullRefreshing] = useState(false);
   const [working, setWorking] = useState(false);
   const [undoAction, setUndoAction] = useState<UndoAction | null>(null);
   const [undoing, setUndoing] = useState(false);
@@ -273,6 +277,16 @@ export default function App() {
   const notesRef = useRef(notes);
   const lastListPathRef = useRef("");
   const refreshingRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const moreControllerRef = useRef<AbortController | null>(null);
+  const checkControllerRef = useRef<AbortController | null>(null);
+  const listGenerationRef = useRef(0);
+  const pagesLoadedRef = useRef(1);
+  const pageLoadFailedRef = useRef(false);
+  const hasMoreRef = useRef(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const mainContentRef = useRef<HTMLDivElement>(null);
+  const scrollAnchorRef = useRef<ScrollAnchor | null>(null);
   const deepLinkNoteRef = useRef(new URL(window.location.href).searchParams.get("note"));
 
   useEffect(() => {
@@ -316,6 +330,14 @@ export default function App() {
   }, []);
 
   useEffect(() => { notesRef.current = notes; }, [notes]);
+  useLayoutEffect(() => {
+    const anchor = scrollAnchorRef.current;
+    if (!anchor) return;
+    scrollAnchorRef.current = null;
+    const card = [...document.querySelectorAll<HTMLElement>(".card[data-note-id]")]
+      .find((element) => element.dataset.noteId === anchor.id);
+    window.scrollTo({ top: card ? window.scrollY + card.getBoundingClientRect().top - anchor.top : anchor.scrollY, behavior: "instant" });
+  }, [notes]);
   useEffect(() => {
     setSelectedNoteIds(new Set());
     setSelecting(false);
@@ -345,9 +367,20 @@ export default function App() {
     const path = listPath(view, search, labelFilter, 0);
     const changedFilter = path !== lastListPathRef.current;
     lastListPathRef.current = path;
-    const pages = changedFilter ? 1 : Math.max(1, Math.ceil(notesRef.current.length / 50));
+    const generation = ++listGenerationRef.current;
+    checkControllerRef.current?.abort();
+    moreControllerRef.current?.abort();
+    moreControllerRef.current = null;
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
+    pageLoadFailedRef.current = false;
+    const pages = changedFilter ? 1 : pagesLoadedRef.current;
     refreshingRef.current = true;
     if (changedFilter) {
+      scrollAnchorRef.current = null;
+      pagesLoadedRef.current = 1;
+      notesRef.current = [];
+      hasMoreRef.current = false;
       setLoading(true);
       setNotes([]);
       setHasMore(false);
@@ -357,22 +390,32 @@ export default function App() {
       try {
         const collected: Note[] = [];
         let more = false;
+        let fetchedPages = 0;
         for (let page = 0; page < pages; page++) {
           const data = await api<NoteList>(listPath(view, search, labelFilter, page * 50), { signal: controller.signal });
           collected.push(...data.notes);
-          more = data.hasMore;
+          fetchedPages++;
+          more = data.hasMore && data.notes.length > 0;
           if (!more) break;
         }
         if (!controller.signal.aborted) {
+          if (!changedFilter && !scrollAnchorRef.current) scrollAnchorRef.current = captureListAnchor();
+          notesRef.current = collected;
+          pagesLoadedRef.current = fetchedPages;
+          hasMoreRef.current = more;
           setNotes(collected);
           setHasMore(more);
         }
       } catch (cause) {
-        if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "読み込みに失敗しました。");
-      } finally {
         if (!controller.signal.aborted) {
+          scrollAnchorRef.current = null;
+          setError(cause instanceof Error ? cause.message : "読み込みに失敗しました。");
+        }
+      } finally {
+        if (!controller.signal.aborted && generation === listGenerationRef.current) {
           refreshingRef.current = false;
           setLoading(false);
+          setPullRefreshing(false);
         }
       }
     }
@@ -394,13 +437,19 @@ export default function App() {
     let active = true;
     let checking = false;
     async function checkForNewNotes() {
-      if (document.visibilityState !== "visible" || refreshingRef.current || bulkWorkingRef.current || checking) return;
+      if (document.visibilityState !== "visible" || refreshingRef.current || loadingMoreRef.current || bulkWorkingRef.current || checking) return;
       checking = true;
+      const controller = new AbortController();
+      checkControllerRef.current = controller;
       try {
-        const data = await api<NoteList>(listPath(view, search, labelFilter, 0));
-        if (active && !bulkWorkingRef.current && firstPageChanged(notesRef.current, data)) setReload((value) => value + 1);
+        const data = await api<NoteList>(listPath(view, search, labelFilter, 0), { signal: controller.signal });
+        if (active && !controller.signal.aborted && !refreshingRef.current && !loadingMoreRef.current
+          && !bulkWorkingRef.current && firstPageChanged(notesRef.current, data)) reloadList();
       } catch { /* 自動確認の失敗は表示中の一覧に影響させない。 */ }
-      finally { checking = false; }
+      finally {
+        checking = false;
+        if (checkControllerRef.current === controller) checkControllerRef.current = null;
+      }
     }
     const interval = window.setInterval(() => { void checkForNewNotes(); }, 10_000);
     const onFocus = () => { void checkForNewNotes(); };
@@ -409,11 +458,65 @@ export default function App() {
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       active = false;
+      checkControllerRef.current?.abort();
       window.clearInterval(interval);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [view, search, labelFilter]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !hasMore || loading || loadingMore) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) void loadMore();
+    }, { rootMargin: "0px 0px 240px 0px" });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [notes, hasMore, loading, loadingMore, reload, view, search, labelFilter]);
+
+  useEffect(() => () => { moreControllerRef.current?.abort(); }, []);
+
+  useEffect(() => {
+    const content = mainContentRef.current;
+    if (!content || draft || settingsOpen || labelManagerOpen || importOpen || exportOpen || bulkLabelsOpen || menuOpen || settingsMenuOpen || working) return;
+    let start: { x: number; y: number } | null = null;
+    let distance = 0;
+    const reset = () => { start = null; distance = 0; setPullDistance(0); };
+    const onStart = (event: TouchEvent) => {
+      if (event.touches.length !== 1 || window.scrollY > 3 || refreshingRef.current
+        || !window.matchMedia("(pointer: coarse), (max-width: 760px)").matches) return;
+      start = { x: event.touches[0].clientX, y: event.touches[0].clientY };
+      distance = 0;
+    };
+    const onMove = (event: TouchEvent) => {
+      if (!start) return;
+      if (event.touches.length !== 1 || refreshingRef.current || window.scrollY > 3) { reset(); return; }
+      const dy = event.touches[0].clientY - start.y;
+      const dx = event.touches[0].clientX - start.x;
+      if (dy < 0 || (Math.abs(dx) > 8 && Math.abs(dx) > dy)) { reset(); return; }
+      if (dy < 8) return;
+      if (event.cancelable) event.preventDefault();
+      distance = Math.min(100, dy * .6);
+      setPullDistance(distance);
+    };
+    const onEnd = () => {
+      const shouldRefresh = start && distance >= 70 && window.scrollY <= 3 && !refreshingRef.current;
+      reset();
+      if (shouldRefresh) { setPullRefreshing(true); refreshCurrent(); }
+    };
+    content.addEventListener("touchstart", onStart, { passive: true });
+    content.addEventListener("touchmove", onMove, { passive: false });
+    content.addEventListener("touchend", onEnd);
+    content.addEventListener("touchcancel", reset);
+    return () => {
+      content.removeEventListener("touchstart", onStart);
+      content.removeEventListener("touchmove", onMove);
+      content.removeEventListener("touchend", onEnd);
+      content.removeEventListener("touchcancel", reset);
+      reset();
+    };
+  }, [draft, settingsOpen, labelManagerOpen, importOpen, exportOpen, bulkLabelsOpen, menuOpen, settingsMenuOpen, working]);
 
   useEffect(() => {
     if (!richLinkPreview) return;
@@ -514,7 +617,7 @@ export default function App() {
       const result = await api<CreatedLabel>("/api/labels", { method: "POST", body: JSON.stringify({ name }) });
       setAvailableLabels((current) => [...current.filter((label) => labelKey(label) !== labelKey(result.label)), result.label].sort());
       if (selectForBulk) setBulkLabels((current) => current.some((label) => labelKey(label) === labelKey(result.label)) ? current : [...current, result.label]);
-      setReload((value) => value + 1);
+      reloadList();
       return result;
     } finally { setCreatingStandaloneLabel(false); }
   }
@@ -584,7 +687,7 @@ export default function App() {
       }
       labelRenameAliasesRef.current.set(oldKey, label);
       cancelLabelRename();
-      setReload((value) => value + 1);
+      reloadList();
     } catch (cause) {
       setRenameError(cause instanceof Error ? cause.message : "ラベル名を変更できませんでした。");
     } finally {
@@ -613,7 +716,7 @@ export default function App() {
         setView("active");
       }
       closeLabelManager();
-      setReload((value) => value + 1);
+      reloadList();
     } catch (cause) {
       setLabelDeleteError(cause instanceof Error ? cause.message : "ラベルを削除できませんでした。");
     } finally {
@@ -630,22 +733,62 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function refreshCurrent() {
+  function captureListAnchor(excludeId?: string | null): ScrollAnchor {
+    const headerBottom = document.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0;
+    const candidates = [...document.querySelectorAll<HTMLElement>(".card[data-note-id]")]
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return element.dataset.noteId !== excludeId && rect.bottom > headerBottom && rect.top < window.innerHeight;
+      });
+    candidates.sort((a, b) => Math.abs(a.getBoundingClientRect().top - headerBottom) - Math.abs(b.getBoundingClientRect().top - headerBottom));
+    const card = candidates[0];
+    return { id: card?.dataset.noteId ?? null, top: card?.getBoundingClientRect().top ?? 0, scrollY: window.scrollY };
+  }
+
+  function reloadList() {
+    refreshingRef.current = true;
+    checkControllerRef.current?.abort();
+    moreControllerRef.current?.abort();
     setReload((value) => value + 1);
   }
 
+  function refreshCurrent() {
+    if (refreshingRef.current) return;
+    reloadList();
+  }
+
   async function loadMore() {
-    if (refreshingRef.current || loading) return;
-    setLoading(true);
+    if (refreshingRef.current || loadingMoreRef.current || !hasMoreRef.current || pageLoadFailedRef.current) return;
+    const controller = new AbortController();
+    const generation = listGenerationRef.current;
+    const offset = pagesLoadedRef.current * 50;
+    checkControllerRef.current?.abort();
+    loadingMoreRef.current = true;
+    moreControllerRef.current = controller;
+    setLoadingMore(true);
     setError("");
     try {
-      const data = await api<NoteList>(listPath(view, search, labelFilter, notes.length));
-      setNotes((current) => [...current, ...data.notes]);
-      setHasMore(data.hasMore);
+      const data = await api<NoteList>(listPath(view, search, labelFilter, offset), { signal: controller.signal });
+      if (controller.signal.aborted || generation !== listGenerationRef.current) return;
+      const ids = new Set(notesRef.current.map((note) => note.id));
+      const added = data.notes.filter((note) => !ids.has(note.id));
+      scrollAnchorRef.current = captureListAnchor();
+      notesRef.current = [...notesRef.current, ...added];
+      pagesLoadedRef.current++;
+      hasMoreRef.current = data.hasMore && added.length > 0;
+      setNotes(notesRef.current);
+      setHasMore(hasMoreRef.current);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "読み込みに失敗しました。");
+      if (!controller.signal.aborted && generation === listGenerationRef.current) {
+        pageLoadFailedRef.current = true;
+        setError(`${cause instanceof Error ? cause.message : "読み込みに失敗しました。"} 更新ボタンで再試行してください。`);
+      }
     } finally {
-      setLoading(false);
+      if (moreControllerRef.current === controller) {
+        moreControllerRef.current = null;
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
     }
   }
 
@@ -682,7 +825,8 @@ export default function App() {
       }
       pendingImagesRef.current = failed;
       setPendingImages(failed);
-      setReload((value) => value + 1);
+      scrollAnchorRef.current = captureListAnchor(editingId);
+      reloadList();
       if (failed.length) {
         setError(`メモは保存しました。画像のアップロードに失敗: ${failed.map((item) => item.file.name).join("、")}。保存を押すと再試行できます。`);
       } else {
@@ -702,7 +846,7 @@ export default function App() {
     if (field === "archived") setUndoAction(null);
     try {
       await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify({ [field]: !note[field] }) });
-      setReload((value) => value + 1);
+      reloadList();
       if (field === "archived") {
         setUndoAction({
           message: note.archived ? "アーカイブから戻しました。" : "アーカイブしました。",
@@ -725,7 +869,7 @@ export default function App() {
     setUndoAction(null);
     try {
       await api(`/api/notes/${note.id}`, { method: "DELETE" });
-      setReload((value) => value + 1);
+      reloadList();
       setUndoAction({
         message: "ゴミ箱に移動しました。",
         undo: async () => { await api(`/api/notes/${note.id}/restore`, { method: "POST" }); },
@@ -745,7 +889,7 @@ export default function App() {
     setError("");
     try {
       await undoAction.undo();
-      setReload((value) => value + 1);
+      reloadList();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "取り消しに失敗しました。");
     } finally {
@@ -842,7 +986,7 @@ export default function App() {
     const message = `${succeeded.length}${particle}${messages[operation]}`;
     setBulkResult({ message: `成功 ${succeeded.length}件 / 失敗 ${failed}件${failed ? `：${[...new Set(failures)].join("、")}` : ""}`, failed });
     endSelection();
-    setReload((value) => value + 1);
+    reloadList();
     if (!succeeded.length) return;
     setUndoAction(operation === "permanent" ? { message } : {
       message,
@@ -880,7 +1024,7 @@ export default function App() {
     try {
       await api(`/api/notes/${editingId}`, { method: "DELETE" });
       closeEditor();
-      setReload((value) => value + 1);
+      reloadList();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "削除に失敗しました。");
     } finally {
@@ -894,7 +1038,7 @@ export default function App() {
     setError("");
     try {
       await api(`/api/notes/${note.id}/restore`, { method: "POST" });
-      setReload((value) => value + 1);
+      reloadList();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "復元に失敗しました。");
     } finally {
@@ -908,7 +1052,7 @@ export default function App() {
     setError("");
     try {
       await api(`/api/notes/${note.id}/permanent`, { method: "DELETE" });
-      setReload((value) => value + 1);
+      reloadList();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "完全削除に失敗しました。");
     } finally {
@@ -1038,7 +1182,7 @@ export default function App() {
         setImportProgress({ notes: { ...progress.notes }, attachments: { ...progress.attachments } });
       }
       setImportMessage("インポート完了");
-      setReload((value) => value + 1);
+      reloadList();
     } catch (cause) {
       setImportMessage(cause instanceof Error ? cause.message : "インポートに失敗しました。");
     } finally {
@@ -1109,7 +1253,7 @@ export default function App() {
     const remainingDays = view === "trash" ? trashRemainingDays(note.deleted_at) : null;
     const selected = selectedNoteIds.has(note.id);
     return (
-      <article className={`card${selected ? " selected-card" : ""}`} data-color={note.color} key={note.id}
+      <article className={`card${selected ? " selected-card" : ""}`} data-color={note.color} data-note-id={note.id} key={note.id}
         onClick={selecting ? () => toggleNoteSelection(note.id) : undefined}>
         {selecting && <button type="button" className="card-select" aria-label={`${note.title || "無題のメモ"}${selected ? "の選択を解除" : "を選択"}`}
           aria-pressed={selected} disabled={working} onClick={(event) => { event.stopPropagation(); toggleNoteSelection(note.id); }}>{selected ? "✓" : ""}</button>}
@@ -1192,7 +1336,8 @@ export default function App() {
             </nav>
           </div>
         </aside>
-        <div className="main-content">
+        <div className="main-content" ref={mainContentRef}>
+      {(pullDistance > 0 || pullRefreshing) && <div className="pull-indicator" role="status" style={{ height: pullRefreshing ? 38 : Math.min(pullDistance, 80) }}>↻ {pullRefreshing ? "更新中…" : pullDistance >= 70 ? "離して更新" : "引っ張って更新"}</div>}
       {bulkResult && <p className={bulkResult.failed ? "error" : "bulk-result"} role={bulkResult.failed ? "alert" : "status"}>{bulkResult.message}</p>}
       {error && !draft && <p className="error" role="alert">{error}</p>}
       {!loading && notes.length === 0 && <p className="empty">{search.trim() || labelFilter ? "該当するメモはありません。" : view === "active" ? "メモはまだありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}
@@ -1205,8 +1350,8 @@ export default function App() {
         {otherNotes.length > 0 && <section className="grid" aria-label={view === "active" ? "メモ一覧" : "アーカイブ一覧"}>{otherNotes.map(renderNoteCard)}</section>}
       </>}
 
-      {loading && <p className="status">読み込み中…</p>}
-      {hasMore && !loading && <button className="more" onClick={loadMore}>続きを読み込む</button>}
+      {(loading || loadingMore) && <p className="status">読み込み中…</p>}
+      <div className="list-sentinel" ref={sentinelRef} aria-hidden="true" />
         </div>
       </div>
 

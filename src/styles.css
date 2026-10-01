@@ -95,7 +95,9 @@ button.card-content:hover { background: #ffffff70; }
 .snackbar span { min-width: 0; overflow-wrap: anywhere; }
 .snackbar button { flex-shrink: 0; border: 0; background: transparent; color: #f4cf65; padding: 8px 0; font-weight: 600; }
 .empty, .status { color: #777; text-align: center; margin: 70px 0; }
-.more { display: block; margin: 28px auto 0; border: 1px solid #d2d2ca; border-radius: 9px; background: white; padding: 10px 18px; }
+.list-sentinel { height: 1px; overflow-anchor: none; }
+.main-content .grid { overflow-anchor: none; }
+.pull-indicator { display: flex; align-items: center; justify-content: center; overflow: hidden; color: inherit; font-size: .85rem; }
 .error { color: #972e2e; background: #fff0ef; border-radius: 8px; padding: 10px 14px; }
 .overlay { position: fixed; inset: 0; z-index: 30; background: #0007; display: flex; align-items: center; justify-content: center; padding: 16px; }
 .utility-modal { width: min(100%, 460px); max-height: calc(100vh - 32px); overflow-y: auto; border-radius: 14px; background: white; padding: 22px; box-shadow: 0 18px 55px #0003; display: grid; gap: 16px; }
@@ -181,6 +183,7 @@ h2 { margin: 0; font-size: 1.15rem; }
   .grid { column-count: 3; }
 }
 @media (max-width: 760px) {
+  html, body { overscroll-behavior-y: contain; }
   .app { padding: 0 14px 32px; }
   .topbar { min-height: 66px; flex-wrap: wrap; justify-content: space-between; gap: 10px; padding: 12px 0; }
   .menu-toggle { display: inline-block; }
@@ -267,7 +270,6 @@ h2 { margin: 0; font-size: 1.15rem; }
 :root[data-theme="dark"] .card-actions button, :root[data-theme="dark"] .section-heading button { color: #e0ded8; }
 :root[data-theme="dark"] .card-actions button:hover { background: #ffffff16; }
 :root[data-theme="dark"] .card-actions button.danger, :root[data-theme="dark"] .checklist-row button, :root[data-theme="dark"] .editor-image button, :root[data-theme="dark"] .danger { color: #ffaaaa; }
-:root[data-theme="dark"] .more { color: #eeeae0; background: #2e3034; border-color: #56595c; }
 :root[data-theme="dark"] .error { color: #ffb3af; background: #512d2d; }
 :root[data-theme="dark"] .trash-countdown { color: #bcbdbd; }
 :root[data-theme="dark"] .close { color: #eeeae0; }
