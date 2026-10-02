@@ -135,7 +135,7 @@ h2 { margin: 0; font-size: 1.15rem; }
 .standalone-label-creator .new-label-row input { width: 100%; border: 1px solid #cecec8; border-radius: 6px; padding: 8px; background: white; color: inherit; }
 .standalone-label-creator p { padding: 5px; font-size: .85rem; }
 .standalone-label-creator .new-label-row button { color: #242424; }
-.new-label-row button { border: 1px solid #cecec8; border-radius: 6px; background: #f4c84c; padding: 4px 9px; }
+.new-label-row button { border: 1px solid #cecec8; border-radius: 6px; background: #f4c84c; color: #242424; padding: 4px 9px; }
 .label-options { display: grid; }
 .label-options label { display: flex; align-items: center; gap: 8px; border-radius: 5px; padding: 7px; overflow-wrap: anywhere; }
 .selected-labels { display: flex; flex-wrap: wrap; gap: 5px; }
