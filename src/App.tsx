@@ -10,7 +10,7 @@ import type { LinkPreview } from "./linkPreview";
 import { NOTE_COLORS } from "./types";
 import type { Attachment, ChecklistInput, Note, NoteColor, NoteInput } from "./types";
 
-type View = "active" | "archived" | "trash";
+type View = "active" | "unpinned" | "archived" | "trash";
 type NoteList = { notes: Note[]; hasMore: boolean };
 type NoteCheck = { notes: Pick<Note, "id" | "updated_at">[] };
 type ImportCounts = { done: number; total: number; success: number; failed: number; skipped: number };
@@ -1410,6 +1410,7 @@ export default function App() {
           <div className="sidebar-title">MyKeep</div>
           <nav className="sidebar-nav" aria-label="メモの表示">
             <button type="button" className={view === "active" && !labelFilter ? "selected" : ""} aria-current={view === "active" && !labelFilter ? "page" : undefined} onClick={() => selectView("active")}><span aria-hidden="true">💡</span>メモ</button>
+            <button type="button" className={view === "unpinned" ? "selected" : ""} aria-current={view === "unpinned" ? "page" : undefined} onClick={() => selectView("unpinned")}><span aria-hidden="true">○</span>ピンなし</button>
             <button type="button" className={view === "archived" ? "selected" : ""} aria-current={view === "archived" ? "page" : undefined} onClick={() => selectView("archived")}><span aria-hidden="true">📦</span>アーカイブ</button>
             <button type="button" className={view === "trash" ? "selected" : ""} aria-current={view === "trash" ? "page" : undefined} onClick={() => selectView("trash")}><span aria-hidden="true">🗑</span>ゴミ箱</button>
           </nav>
@@ -1425,14 +1426,14 @@ export default function App() {
       {(pullDistance > 0 || pullRefreshing) && <div className="pull-indicator" role="status" style={{ height: pullRefreshing ? 38 : Math.min(pullDistance, 80) }}>↻ {pullRefreshing ? "更新中…" : pullDistance >= 70 ? "離して更新" : "引っ張って更新"}</div>}
       {bulkResult && <p className={bulkResult.failed ? "error" : "bulk-result"} role={bulkResult.failed ? "alert" : "status"}>{bulkResult.message}</p>}
       {error && !draft && <p className="error" role="alert">{error}</p>}
-      {!loading && notes.length === 0 && <p className="empty">{search.trim() || labelFilter ? "該当するメモはありません。" : view === "active" ? "メモはまだありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}
+      {!loading && notes.length === 0 && <p className="empty">{search.trim() || labelFilter ? "該当するメモはありません。" : view === "active" ? "メモはまだありません。" : view === "unpinned" ? "ピンなしのメモはありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}
 
       {view === "trash" ? (
         <section className="grid" aria-label="ゴミ箱一覧">{notes.map(renderNoteCard)}</section>
       ) : <>
         {pinnedNotes.length > 0 && <section className="grid" aria-label="ピン留めメモ">{pinnedNotes.map(renderNoteCard)}</section>}
         {pinnedNotes.length > 0 && otherNotes.length > 0 && <div className="note-section-separator" aria-hidden="true" />}
-        {otherNotes.length > 0 && <section className="grid" aria-label={view === "active" ? "メモ一覧" : "アーカイブ一覧"}>{otherNotes.map(renderNoteCard)}</section>}
+        {otherNotes.length > 0 && <section className="grid" aria-label={view === "active" ? "メモ一覧" : view === "unpinned" ? "ピンなしメモ一覧" : "アーカイブ一覧"}>{otherNotes.map(renderNoteCard)}</section>}
       </>}
 
       {(loading || loadingMore) && <p className="status">読み込み中…</p>}

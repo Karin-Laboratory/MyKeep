@@ -255,14 +255,15 @@ function noteListFilter(params: URLSearchParams) {
   const view = params.get("view") ?? "active";
   const query = params.get("q")?.trim() ?? "";
   const label = params.get("label")?.trim() ?? "";
-  if ((view !== "active" && view !== "archived" && view !== "trash")
+  if ((view !== "active" && view !== "unpinned" && view !== "archived" && view !== "trash")
     || query.length > MAX_SEARCH_LENGTH || label.length > 100) {
     return null;
   }
 
-  const conditions = view === "trash" ? ["deleted_at IS NOT NULL"]
+  const conditions = view === "unpinned" ? ["deleted_at IS NULL", "archived = 0", "pinned = 0"]
+    : view === "trash" ? ["deleted_at IS NOT NULL"]
     : label ? ["deleted_at IS NULL"] : ["deleted_at IS NULL", "archived = ?"];
-  const bindings: (string | number)[] = view === "trash" || label ? [] : [view === "archived" ? 1 : 0];
+  const bindings: (string | number)[] = view === "unpinned" || view === "trash" || label ? [] : [view === "archived" ? 1 : 0];
   if (query) {
     conditions.push("(instr(lower(title), lower(?)) > 0 OR instr(lower(body), lower(?)) > 0 OR instr(lower(url), lower(?)) > 0)");
     bindings.push(query, query, query);
@@ -271,7 +272,8 @@ function noteListFilter(params: URLSearchParams) {
     conditions.push("EXISTS (SELECT 1 FROM note_labels nl WHERE nl.note_id = notes.id AND nl.label_key = ?)");
     bindings.push(labelKey(label));
   }
-  const order = view === "trash" ? "deleted_at DESC, id DESC" : "pinned DESC, updated_at DESC, id DESC";
+  const order = view === "trash" ? "deleted_at DESC, id DESC"
+    : view === "unpinned" ? "updated_at DESC, id DESC" : "pinned DESC, updated_at DESC, id DESC";
   return { where: conditions.join(" AND "), bindings, order };
 }
 
