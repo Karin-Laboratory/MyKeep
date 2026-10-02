@@ -251,15 +251,13 @@ async function withRelations(rows: NoteRow[], env: Env): Promise<Note[]> {
   return rows.map((row) => toNote(row, byAttachment.get(row.id), byChecklist.get(row.id), byLabel.get(row.id)));
 }
 
-async function listNotes(request: Request, env: Env): Promise<Response> {
-  const params = new URL(request.url).searchParams;
+function noteListFilter(params: URLSearchParams) {
   const view = params.get("view") ?? "active";
-  const offset = Number(params.get("offset") ?? "0");
   const query = params.get("q")?.trim() ?? "";
   const label = params.get("label")?.trim() ?? "";
   if ((view !== "active" && view !== "archived" && view !== "trash")
-    || !Number.isSafeInteger(offset) || offset < 0 || query.length > MAX_SEARCH_LENGTH || label.length > 100) {
-    return json({ error: "一覧の指定が正しくありません。" }, 400);
+    || query.length > MAX_SEARCH_LENGTH || label.length > 100) {
+    return null;
   }
 
   const conditions = view === "trash" ? ["deleted_at IS NOT NULL"]
@@ -274,12 +272,31 @@ async function listNotes(request: Request, env: Env): Promise<Response> {
     bindings.push(labelKey(label));
   }
   const order = view === "trash" ? "deleted_at DESC, id DESC" : "pinned DESC, updated_at DESC, id DESC";
+  return { where: conditions.join(" AND "), bindings, order };
+}
+
+async function listNotes(request: Request, env: Env): Promise<Response> {
+  const params = new URL(request.url).searchParams;
+  const offset = Number(params.get("offset") ?? "0");
+  const filter = noteListFilter(params);
+  if (!filter || !Number.isSafeInteger(offset) || offset < 0) {
+    return json({ error: "一覧の指定が正しくありません。" }, 400);
+  }
   const result = await env.DB.prepare(
-    `${SELECT_NOTE} WHERE ${conditions.join(" AND ")} ORDER BY ${order} LIMIT ? OFFSET ?`,
-  ).bind(...bindings, PAGE_SIZE + 1, offset).all<NoteRow>();
+    `${SELECT_NOTE} WHERE ${filter.where} ORDER BY ${filter.order} LIMIT ? OFFSET ?`,
+  ).bind(...filter.bindings, PAGE_SIZE + 1, offset).all<NoteRow>();
   const rows = result.results ?? [];
   const page = rows.slice(0, PAGE_SIZE);
   return json({ notes: await withRelations(page, env), hasMore: rows.length > PAGE_SIZE });
+}
+
+async function checkNotes(request: Request, env: Env): Promise<Response> {
+  const filter = noteListFilter(new URL(request.url).searchParams);
+  if (!filter) return json({ error: "一覧の指定が正しくありません。" }, 400);
+  const result = await env.DB.prepare(
+    `SELECT id, updated_at FROM notes WHERE ${filter.where} ORDER BY ${filter.order} LIMIT ?`,
+  ).bind(...filter.bindings, PAGE_SIZE).all<Pick<NoteRow, "id" | "updated_at">>();
+  return json({ notes: result.results ?? [] });
 }
 
 async function listLabels(env: Env): Promise<Response> {
@@ -878,6 +895,10 @@ export default {
       if (request.method !== "GET") {
         const origin = request.headers.get("Origin");
         if (origin && origin !== url.origin) return json({ error: "この操作は許可されていません。" }, 403);
+      }
+
+      if (url.pathname === "/api/notes/check" && request.method === "GET") {
+        return await checkNotes(request, env);
       }
 
       if (url.pathname === "/api/notes") {

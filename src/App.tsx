@@ -12,6 +12,7 @@ import type { Attachment, ChecklistInput, Note, NoteColor, NoteInput } from "./t
 
 type View = "active" | "archived" | "trash";
 type NoteList = { notes: Note[]; hasMore: boolean };
+type NoteCheck = { notes: Pick<Note, "id" | "updated_at">[] };
 type ImportCounts = { done: number; total: number; success: number; failed: number; skipped: number };
 type ImportProgress = { notes: ImportCounts & { trashed: number }; attachments: ImportCounts };
 type NoteDraft = NoteInput & { checklist: ChecklistInput[] };
@@ -35,6 +36,9 @@ const PREVIEW_SETTING = "mykeep.richLinkPreview";
 const DARK_SETTING = "mykeep.darkMode";
 const CARD_TITLE_SETTING = "mykeep.cardShowTitle";
 const CARD_BODY_SETTING = "mykeep.cardShowBody";
+const REFRESH_SETTING = "mykeep.autoRefreshSeconds";
+const REFRESH_SECONDS = [10, 30, 60] as const;
+type RefreshSeconds = typeof REFRESH_SECONDS[number];
 
 function layoutNoteGrids(root: HTMLElement) {
   for (const grid of root.querySelectorAll<HTMLElement>(".grid")) {
@@ -155,16 +159,31 @@ function savedSetting(key: string, fallback: boolean): boolean {
   }
 }
 
-function firstPageChanged(current: Note[], next: NoteList): boolean {
+function savedRefreshSeconds(): RefreshSeconds {
+  try {
+    const value = window.localStorage.getItem(REFRESH_SETTING);
+    return REFRESH_SECONDS.find((seconds) => String(seconds) === value) ?? 30;
+  } catch {
+    return 30;
+  }
+}
+
+function firstPageChanged(current: Note[], next: NoteCheck): boolean {
   const first = current.slice(0, 50);
   return first.length !== next.notes.length
     || first.some((note, index) => note.id !== next.notes[index].id || note.updated_at !== next.notes[index].updated_at);
 }
 
-function listPath(view: View, search: string, label: string, offset: number): string {
-  const params = new URLSearchParams({ view, offset: String(offset) });
+function listParams(view: View, search: string, label: string): URLSearchParams {
+  const params = new URLSearchParams({ view });
   if (search.trim()) params.set("q", search.trim());
   if (label) params.set("label", label);
+  return params;
+}
+
+function listPath(view: View, search: string, label: string, offset: number): string {
+  const params = listParams(view, search, label);
+  params.set("offset", String(offset));
   return `/api/notes?${params}`;
 }
 
@@ -307,6 +326,7 @@ export default function App() {
   const [cardShowTitle, setCardShowTitle] = useState(() => savedSetting(CARD_TITLE_SETTING, true));
   const [cardShowBody, setCardShowBody] = useState(() => savedSetting(CARD_BODY_SETTING, true));
   const [darkMode, setDarkMode] = useState(() => savedSetting(DARK_SETTING, false));
+  const [autoRefreshSeconds, setAutoRefreshSeconds] = useState(savedRefreshSeconds);
   const [previews, setPreviews] = useState<Record<string, LinkPreview | null>>({});
   const settingsMenuRef = useRef<HTMLDivElement>(null);
   const labelMenuRef = useRef<HTMLDivElement>(null);
@@ -417,8 +437,9 @@ export default function App() {
       window.localStorage.setItem(PREVIEW_SETTING, String(richLinkPreview));
       window.localStorage.setItem(CARD_TITLE_SETTING, String(cardShowTitle));
       window.localStorage.setItem(CARD_BODY_SETTING, String(cardShowBody));
+      window.localStorage.setItem(REFRESH_SETTING, String(autoRefreshSeconds));
     } catch { /* 保存できない環境でも画面内の設定は使える。 */ }
-  }, [darkMode, richLinkPreview, cardShowTitle, cardShowBody]);
+  }, [darkMode, richLinkPreview, cardShowTitle, cardShowBody, autoRefreshSeconds]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -506,7 +527,7 @@ export default function App() {
       const controller = new AbortController();
       checkControllerRef.current = controller;
       try {
-        const data = await api<NoteList>(listPath(view, search, labelFilter, 0), { signal: controller.signal });
+        const data = await api<NoteCheck>(`/api/notes/check?${listParams(view, search, labelFilter)}`, { signal: controller.signal });
         if (active && !controller.signal.aborted && !refreshingRef.current && !loadingMoreRef.current
           && !bulkWorkingRef.current && firstPageChanged(notesRef.current, data)) reloadList();
       } catch { /* 自動確認の失敗は表示中の一覧に影響させない。 */ }
@@ -515,7 +536,7 @@ export default function App() {
         if (checkControllerRef.current === controller) checkControllerRef.current = null;
       }
     }
-    const interval = window.setInterval(() => { void checkForNewNotes(); }, 30_000);
+    const interval = window.setInterval(() => { void checkForNewNotes(); }, autoRefreshSeconds * 1000);
     const onFocus = () => { void checkForNewNotes(); };
     const onVisibility = () => { if (document.visibilityState === "visible") void checkForNewNotes(); };
     window.addEventListener("focus", onFocus);
@@ -527,7 +548,7 @@ export default function App() {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [view, search, labelFilter]);
+  }, [view, search, labelFilter, autoRefreshSeconds]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -1470,6 +1491,13 @@ export default function App() {
           <label className="setting-row"><input type="checkbox" checked={cardShowTitle} onChange={(event) => setCardShowTitle(event.target.checked)} />タイトル表示</label>
           <label className="setting-row"><input type="checkbox" checked={cardShowBody} onChange={(event) => setCardShowBody(event.target.checked)} />本文表示</label>
           <label className="setting-row"><input type="checkbox" checked={darkMode} onChange={(event) => setDarkMode(event.target.checked)} />ダークモード</label>
+          <label className="setting-row">自動更新間隔
+            <select value={autoRefreshSeconds} onChange={(event) => {
+              setAutoRefreshSeconds(REFRESH_SECONDS.find((seconds) => String(seconds) === event.target.value) ?? 30);
+            }}>
+              {REFRESH_SECONDS.map((seconds) => <option key={seconds} value={seconds}>{seconds}秒</option>)}
+            </select>
+          </label>
         </section>
       </div>}
 

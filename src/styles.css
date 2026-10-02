@@ -117,6 +117,7 @@ button.card-content:hover { background: #ffffff70; }
 .label-delete-button { border: 1px solid #a52f2f; background: #a52f2f; color: white; }
 .setting-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
 .setting-row input { width: 18px; height: 18px; }
+.setting-row select { border: 1px solid #cecec8; border-radius: 6px; background: white; color: #242424; padding: 6px 10px; }
 .editor { width: min(100%, 600px); max-height: calc(100vh - 32px); overflow-y: auto; border-radius: 14px; background: var(--note-bg, #fff); padding: 22px; box-shadow: 0 18px 55px #0003; display: grid; gap: 12px; }
 .editor-heading { display: flex; justify-content: space-between; align-items: center; }
 h2 { margin: 0; font-size: 1.15rem; }
@@ -236,7 +237,7 @@ h2 { margin: 0; font-size: 1.15rem; }
 :root[data-theme="dark"] .menu-toggle:hover, :root[data-theme="dark"] .icon-button:hover { background: #33363a; }
 :root[data-theme="dark"] .icon-button.active { background: #5a4a20; color: #fff2ca; }
 :root[data-theme="dark"] .search-field, :root[data-theme="dark"] .sidebar-labels h2 { color: #bcbdbd; }
-:root[data-theme="dark"] .search-field input, :root[data-theme="dark"] .editor input:not([type="checkbox"]), :root[data-theme="dark"] .editor textarea, :root[data-theme="dark"] .editor select { background: #282a2d; border-color: #55595d; color: #f4f1e9; }
+:root[data-theme="dark"] .search-field input, :root[data-theme="dark"] .editor input:not([type="checkbox"]), :root[data-theme="dark"] .editor textarea, :root[data-theme="dark"] .editor select, :root[data-theme="dark"] .setting-row select { background: #282a2d; border-color: #55595d; color: #f4f1e9; }
 :root[data-theme="dark"] .label-picker-toggle, :root[data-theme="dark"] .label-picker-menu { background: #282a2d; border-color: #55595d; color: #f4f1e9; }
 :root[data-theme="dark"] .create-label-button:hover, :root[data-theme="dark"] .label-options label:hover { background: #373a3e; }
 :root[data-theme="dark"] .selected-label { background: #55575b; }
