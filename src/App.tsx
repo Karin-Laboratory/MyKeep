@@ -33,6 +33,8 @@ const COLOR_LABELS: Record<NoteColor, string> = {
 };
 const PREVIEW_SETTING = "mykeep.richLinkPreview";
 const DARK_SETTING = "mykeep.darkMode";
+const CARD_TITLE_SETTING = "mykeep.cardShowTitle";
+const CARD_BODY_SETTING = "mykeep.cardShowBody";
 
 function layoutNoteGrids(root: HTMLElement) {
   for (const grid of root.querySelectorAll<HTMLElement>(".grid")) {
@@ -47,14 +49,16 @@ function layoutNoteGrids(root: HTMLElement) {
     const heights = cards.map((card) => Math.ceil(card.getBoundingClientRect().height));
     const bottoms = Array<number>(columns).fill(1);
     let previousStart = 1;
-    cards.forEach((card, index) => {
+    const rows = heights.map((height, index) => {
       const column = index % columns;
       // Keep column order and never place a later card above an earlier card.
       const start = Math.max(bottoms[column], previousStart + (index > 0 && column === 0 ? 1 : 0));
-      const row = `${start} / span ${heights[index]}`;
-      if (card.style.gridRow !== row) card.style.gridRow = row;
-      bottoms[column] = start + heights[index] + gap;
+      bottoms[column] = start + height + gap;
       previousStart = start;
+      return `${start} / span ${height}`;
+    });
+    cards.forEach((card, index) => {
+      if (card.style.gridRow !== rows[index]) card.style.gridRow = rows[index];
     });
   }
 }
@@ -164,13 +168,13 @@ function listPath(view: View, search: string, label: string, offset: number): st
   return `/api/notes?${params}`;
 }
 
-function notePreview(note: Note, showArchive = false) {
+function notePreview(note: Note, showTitle: boolean, showBody: boolean, showArchive = false) {
   const imageAttachments = note.attachments.filter((item) => IMAGE_TYPES.includes(item.mime_type));
   return <>
     {note.pinned && <span className="pin-label">📌 ピン留め</span>}
     {showArchive && note.archived && <span className="pin-label">📦 アーカイブ</span>}
-    {note.title && <strong>{note.title}</strong>}
-    {note.body && <span className="body-preview">{note.body}</span>}
+    {showTitle && note.title && <strong>{note.title}</strong>}
+    {showBody && note.body && <span className="body-preview">{note.body}</span>}
     {note.checklist.length > 0 && <span className="checklist-preview">
       {note.checklist.map((item) => <span className={item.checked ? "checked" : ""} key={item.id}>
         {item.checked ? "☑" : "☐"} {item.text}
@@ -300,6 +304,8 @@ export default function App() {
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [richLinkPreview, setRichLinkPreview] = useState(() => savedSetting(PREVIEW_SETTING, true));
+  const [cardShowTitle, setCardShowTitle] = useState(() => savedSetting(CARD_TITLE_SETTING, true));
+  const [cardShowBody, setCardShowBody] = useState(() => savedSetting(CARD_BODY_SETTING, true));
   const [darkMode, setDarkMode] = useState(() => savedSetting(DARK_SETTING, false));
   const [previews, setPreviews] = useState<Record<string, LinkPreview | null>>({});
   const settingsMenuRef = useRef<HTMLDivElement>(null);
@@ -362,28 +368,32 @@ export default function App() {
 
   useEffect(() => { notesRef.current = notes; }, [notes]);
   useLayoutEffect(() => {
-    if (mainContentRef.current) layoutNoteGrids(mainContentRef.current);
-    const anchor = scrollAnchorRef.current;
-    if (!anchor) return;
-    scrollAnchorRef.current = null;
-    restoreListAnchor(anchor);
-  }, [notes, view, selecting]);
-  useLayoutEffect(() => {
     const root = mainContentRef.current;
     if (!root) return;
     let frame = 0;
-    const observer = new ResizeObserver(() => {
+    let width = root.getBoundingClientRect().width;
+    const scheduleLayout = () => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const anchor = captureListAnchor();
-        layoutNoteGrids(root);
-        restoreListAnchor(anchor);
-      });
+      frame = requestAnimationFrame(() => layoutNoteGrids(root));
+    };
+    const anchor = scrollAnchorRef.current;
+    scrollAnchorRef.current = null;
+    if (anchor) {
+      layoutNoteGrids(root);
+      restoreListAnchor(anchor);
+    } else {
+      scheduleLayout();
+    }
+    const observer = new ResizeObserver((entries) => {
+      const nextWidth = entries.find((entry) => entry.target === root)?.contentRect.width ?? width;
+      // Grid height changes after layout; only root width or card sizes need another pass.
+      if (nextWidth !== width || entries.some((entry) => entry.target !== root)) scheduleLayout();
+      width = nextWidth;
     });
     observer.observe(root);
     root.querySelectorAll<HTMLElement>(".card").forEach((card) => observer.observe(card));
     return () => { observer.disconnect(); cancelAnimationFrame(frame); };
-  }, [notes, view, selecting]);
+  }, [notes, view, selecting, cardShowTitle, cardShowBody]);
   useEffect(() => {
     setSelectedNoteIds(new Set());
     setSelecting(false);
@@ -405,8 +415,10 @@ export default function App() {
     try {
       window.localStorage.setItem(DARK_SETTING, String(darkMode));
       window.localStorage.setItem(PREVIEW_SETTING, String(richLinkPreview));
+      window.localStorage.setItem(CARD_TITLE_SETTING, String(cardShowTitle));
+      window.localStorage.setItem(CARD_BODY_SETTING, String(cardShowBody));
     } catch { /* 保存できない環境でも画面内の設定は使える。 */ }
-  }, [darkMode, richLinkPreview]);
+  }, [darkMode, richLinkPreview, cardShowTitle, cardShowBody]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -445,7 +457,13 @@ export default function App() {
           if (!more) break;
         }
         if (!controller.signal.aborted) {
-          if (!changedFilter && !scrollAnchorRef.current) scrollAnchorRef.current = captureListAnchor();
+          const orderChanged = notesRef.current.some((note, index) =>
+            note.id !== collected[index]?.id || note.pinned !== collected[index]?.pinned);
+          if (!changedFilter && orderChanged) {
+            if (!scrollAnchorRef.current) scrollAnchorRef.current = captureListAnchor();
+          } else {
+            scrollAnchorRef.current = null;
+          }
           notesRef.current = collected;
           pagesLoadedRef.current = fetchedPages;
           hasMoreRef.current = more;
@@ -818,7 +836,6 @@ export default function App() {
       if (controller.signal.aborted || generation !== listGenerationRef.current) return;
       const ids = new Set(notesRef.current.map((note) => note.id));
       const added = data.notes.filter((note) => !ids.has(note.id));
-      scrollAnchorRef.current = captureListAnchor();
       notesRef.current = [...notesRef.current, ...added];
       pagesLoadedRef.current++;
       hasMoreRef.current = data.hasMore && added.length > 0;
@@ -1304,8 +1321,8 @@ export default function App() {
         {selecting && <button type="button" className="card-select" aria-label={`${note.title || "無題のメモ"}${selected ? "の選択を解除" : "を選択"}`}
           aria-pressed={selected} disabled={working} onClick={(event) => { event.stopPropagation(); toggleNoteSelection(note.id); }}>{selected ? "✓" : ""}</button>}
         {view === "trash" || selecting
-          ? <div className="card-content">{notePreview(note, Boolean(labelFilter))}</div>
-          : <button className="card-content" onClick={() => openEditor(note)} aria-label={`${note.title || "無題のメモ"}を編集`}>{notePreview(note, Boolean(labelFilter))}</button>}
+          ? <div className="card-content">{notePreview(note, cardShowTitle, cardShowBody, Boolean(labelFilter))}</div>
+          : <button className="card-content" onClick={() => openEditor(note)} aria-label={`${note.title || "無題のメモ"}を編集`}>{notePreview(note, cardShowTitle, cardShowBody, Boolean(labelFilter))}</button>}
         {note.url && (visiblePreview
           ? <a className="link-preview" href={note.url} target="_blank" rel="noopener noreferrer"
               tabIndex={selecting ? -1 : undefined} onClick={selecting ? (event) => event.preventDefault() : undefined}
@@ -1450,6 +1467,8 @@ export default function App() {
         <section className="utility-modal" role="dialog" aria-modal="true" aria-label="設定">
           <div className="editor-heading"><h2>設定</h2><button type="button" className="close" aria-label="閉じる" onClick={() => setSettingsOpen(false)}>×</button></div>
           <label className="setting-row"><input type="checkbox" checked={richLinkPreview} onChange={(event) => setRichLinkPreview(event.target.checked)} />リッチリンクプレビュー</label>
+          <label className="setting-row"><input type="checkbox" checked={cardShowTitle} onChange={(event) => setCardShowTitle(event.target.checked)} />タイトル表示</label>
+          <label className="setting-row"><input type="checkbox" checked={cardShowBody} onChange={(event) => setCardShowBody(event.target.checked)} />本文表示</label>
           <label className="setting-row"><input type="checkbox" checked={darkMode} onChange={(event) => setDarkMode(event.target.checked)} />ダークモード</label>
         </section>
       </div>}

@@ -64,7 +64,7 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 700; }
 .card[data-color="green"], .editor[data-color="green"] { --note-bg: #e4f3df; }
 .card[data-color="blue"], .editor[data-color="blue"] { --note-bg: #e1efff; }
 .card[data-color="purple"], .editor[data-color="purple"] { --note-bg: #efe7fb; }
-.card-content { display: flex; width: 100%; flex-direction: column; gap: 8px; text-align: left; border: 0; background: transparent; color: inherit; padding: 18px 18px 8px; min-height: 74px; }
+.card-content { display: flex; width: 100%; flex-direction: column; gap: 8px; text-align: left; border: 0; background: transparent; color: inherit; padding: 18px 18px 8px; min-height: 44px; }
 button.card-content:hover { background: #ffffff70; }
 .card-content > strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; font-size: 1rem; overflow-wrap: anywhere; }
 .pin-label { font-size: .76rem; color: #6a603d; }
@@ -192,7 +192,7 @@ h2 { margin: 0; font-size: 1.15rem; }
   .new-note { min-width: 40px; min-height: 40px; padding: 6px; font-size: 1.45rem; line-height: 1; }
   .new-note-text { display: none; }
   .search-field { order: 3; flex: 0 0 100%; width: 100%; margin-left: 0; }
-  .search-field input { width: 100%; min-width: 0; max-width: none; flex: 1; }
+  .search-field input { width: 100%; min-width: 0; max-width: none; flex: 1; font-size: 16px; }
   .app-layout { display: block; padding-top: 16px; }
   .sidebar { position: fixed; z-index: 21; top: 0; bottom: 0; left: 0; width: min(280px, calc(100vw - 40px)); max-height: none; overflow-y: auto; visibility: hidden; pointer-events: none; transform: translateX(-100%); transition: transform .2s ease, visibility .2s; background: #f8f8f6; box-shadow: 3px 0 18px #0002; padding: 22px 12px; }
   .sidebar.open { visibility: visible; pointer-events: auto; transform: translateX(0); }
