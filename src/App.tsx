@@ -456,6 +456,7 @@ export default function App() {
     const pages = changedFilter ? 1 : pagesLoadedRef.current;
     refreshingRef.current = true;
     if (changedFilter) {
+      window.scrollTo({ top: 0, behavior: "instant" });
       scrollAnchorRef.current = null;
       pagesLoadedRef.current = 1;
       notesRef.current = [];
