@@ -195,6 +195,7 @@ h2 { margin: 0; font-size: 1.15rem; }
   .search-field { order: 3; flex: 0 0 100%; width: 100%; margin-left: 0; }
   .search-field input { width: 100%; min-width: 0; max-width: none; flex: 1; font-size: 16px; }
   .app-layout { display: block; padding-top: 16px; }
+  .main-content, .sidebar { touch-action: pan-y pinch-zoom; }
   .sidebar { position: fixed; z-index: 21; top: 0; bottom: 0; left: 0; width: min(280px, calc(100vw - 40px)); max-height: none; overflow-y: auto; visibility: hidden; pointer-events: none; transform: translateX(-100%); transition: transform .2s ease, visibility .2s; background: #f8f8f6; box-shadow: 3px 0 18px #0002; padding: 22px 12px; }
   .sidebar.open { visibility: visible; pointer-events: auto; transform: translateX(0); }
   .sidebar-title { display: block; margin: 0 12px 24px; font-size: 1.35rem; font-weight: 700; }

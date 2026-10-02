@@ -343,6 +343,8 @@ export default function App() {
   const hasMoreRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const mainContentRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const swipeClickUntilRef = useRef(0);
   const scrollAnchorRef = useRef<ScrollAnchor | null>(null);
   const deepLinkNoteRef = useRef(new URL(window.location.href).searchParams.get("note"));
 
@@ -564,36 +566,83 @@ export default function App() {
   useEffect(() => () => { moreControllerRef.current?.abort(); }, []);
 
   useEffect(() => {
-    const content = mainContentRef.current;
-    if (!content || draft || settingsOpen || labelManagerOpen || importOpen || exportOpen || bulkLabelsOpen || menuOpen || settingsMenuOpen || working) return;
+    const clearSwipeClick = () => { swipeClickUntilRef.current = 0; };
+    const onClick = (event: MouseEvent) => {
+      if (Date.now() >= swipeClickUntilRef.current) return;
+      clearSwipeClick();
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    // A new touch is a separate tap; suppress only the click following a completed swipe.
+    document.addEventListener("touchstart", clearSwipeClick, { capture: true, passive: true });
+    document.addEventListener("click", onClick, true);
+    return () => {
+      document.removeEventListener("touchstart", clearSwipeClick, true);
+      document.removeEventListener("click", onClick, true);
+    };
+  }, []);
+
+  useEffect(() => {
+    const content = menuOpen ? sidebarRef.current : mainContentRef.current;
+    if (!content || draft || viewerImageId || settingsOpen || labelManagerOpen || importOpen || exportOpen
+      || importing || exporting || bulkLabelsOpen || settingsMenuOpen || selecting || working || undoing) return;
     let start: { x: number; y: number } | null = null;
+    let direction: "horizontal" | "vertical" | null = null;
+    let canPull = false;
     let distance = 0;
-    const reset = () => { start = null; distance = 0; setPullDistance(0); };
+    const reset = () => { start = null; direction = null; distance = 0; setPullDistance(0); };
+    const chooseDirection = (dx: number, dy: number) => {
+      if (direction || Math.max(Math.abs(dx), Math.abs(dy)) < 12) return;
+      if (Math.abs(dx) > Math.abs(dy) * 1.3) direction = "horizontal";
+      else if (Math.abs(dy) >= Math.abs(dx)) direction = "vertical";
+    };
     const onStart = (event: TouchEvent) => {
-      if (event.touches.length !== 1 || window.scrollY > 3 || refreshingRef.current
+      reset();
+      if (event.touches.length !== 1 || refreshingRef.current
         || !window.matchMedia("(pointer: coarse), (max-width: 760px)").matches) return;
       start = { x: event.touches[0].clientX, y: event.touches[0].clientY };
-      distance = 0;
+      canPull = !menuOpen && window.scrollY <= 3;
     };
     const onMove = (event: TouchEvent) => {
       if (!start) return;
-      if (event.touches.length !== 1 || refreshingRef.current || window.scrollY > 3) { reset(); return; }
+      if (event.touches.length !== 1 || refreshingRef.current) { reset(); return; }
       const dy = event.touches[0].clientY - start.y;
       const dx = event.touches[0].clientX - start.x;
-      if (dy < 0 || (Math.abs(dx) > 8 && Math.abs(dx) > dy)) { reset(); return; }
-      if (dy < 8) return;
+      chooseDirection(dx, dy);
+      if (direction === "horizontal") {
+        if (window.matchMedia("(max-width: 760px)").matches && (menuOpen ? dx < 0 : dx > 0)
+          && event.cancelable) event.preventDefault();
+        return;
+      }
+      if (direction !== "vertical" || !canPull) return;
+      if (window.scrollY > 3 || dy <= 0) { reset(); return; }
       if (event.cancelable) event.preventDefault();
       distance = Math.min(100, dy * .6);
       setPullDistance(distance);
     };
-    const onEnd = () => {
-      const shouldRefresh = start && distance >= 70 && window.scrollY <= 3 && !refreshingRef.current;
+    const onEnd = (event: TouchEvent) => {
+      const end = event.changedTouches[0];
+      if (start && end && !event.touches.length) {
+        const dx = end.clientX - start.x;
+        const dy = end.clientY - start.y;
+        chooseDirection(dx, dy);
+        if (window.matchMedia("(max-width: 760px)").matches && direction === "horizontal"
+          && (menuOpen ? dx < -60 : dx > 60) && Math.abs(dx) > Math.abs(dy) * 1.3) {
+          if (event.cancelable) event.preventDefault();
+          swipeClickUntilRef.current = Date.now() + 700;
+          reset();
+          setMenuOpen(!menuOpen);
+          return;
+        }
+      }
+      const shouldRefresh = start && !event.touches.length && direction === "vertical" && canPull
+        && distance >= 70 && window.scrollY <= 3 && !refreshingRef.current;
       reset();
       if (shouldRefresh) { setPullRefreshing(true); refreshCurrent(); }
     };
     content.addEventListener("touchstart", onStart, { passive: true });
     content.addEventListener("touchmove", onMove, { passive: false });
-    content.addEventListener("touchend", onEnd);
+    content.addEventListener("touchend", onEnd, { passive: false });
     content.addEventListener("touchcancel", reset);
     return () => {
       content.removeEventListener("touchstart", onStart);
@@ -602,7 +651,7 @@ export default function App() {
       content.removeEventListener("touchcancel", reset);
       reset();
     };
-  }, [draft, settingsOpen, labelManagerOpen, importOpen, exportOpen, bulkLabelsOpen, menuOpen, settingsMenuOpen, working]);
+  }, [draft, viewerImageId, settingsOpen, labelManagerOpen, importOpen, exportOpen, importing, exporting, bulkLabelsOpen, menuOpen, settingsMenuOpen, selecting, working, undoing]);
 
   useEffect(() => {
     if (!richLinkPreview) return;
@@ -1406,7 +1455,7 @@ export default function App() {
 
       {menuOpen && <button type="button" className="sidebar-scrim" aria-label="メニューを閉じる" onClick={() => setMenuOpen(false)} />}
       <div className="app-layout">
-        <aside id="sidebar" className={`sidebar${menuOpen ? " open" : ""}`} aria-label="サイドバー">
+        <aside id="sidebar" ref={sidebarRef} className={`sidebar${menuOpen ? " open" : ""}`} aria-label="サイドバー">
           <div className="sidebar-title">MyKeep</div>
           <nav className="sidebar-nav" aria-label="メモの表示">
             <button type="button" className={view === "active" && !labelFilter ? "selected" : ""} aria-current={view === "active" && !labelFilter ? "page" : undefined} onClick={() => selectView("active")}><span aria-hidden="true">💡</span>メモ</button>
