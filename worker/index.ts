@@ -769,6 +769,27 @@ async function captureApi(request: Request, env: Env): Promise<Response> {
   return json({ error: "このメソッドには対応していません。" }, 405);
 }
 
+function capturePreview(form: FormData, url: string): NotePreview {
+  const preview: NotePreview = { preview_title: "", preview_description: "", preview_image: "", preview_hostname: "" };
+  for (const field of Object.keys(PREVIEW_LIMITS) as Array<keyof NotePreview>) {
+    const raw = form.get(field);
+    if (typeof raw !== "string") continue;
+    // Multipart converts LF to CRLF. Measure optional metadata after normalizing it back.
+    const value = raw.replace(/\r\n?/g, "\n").trim();
+    if (value.length <= PREVIEW_LIMITS[field]) preview[field] = value;
+  }
+  if (preview.preview_image) {
+    try {
+      if (!["http:", "https:"].includes(new URL(preview.preview_image).protocol)) preview.preview_image = "";
+    } catch { preview.preview_image = ""; }
+  }
+  if (Object.values(preview).some(Boolean) || form.get("preview_hostname")) {
+    const hostname = new URL(url).hostname;
+    preview.preview_hostname = hostname.length <= PREVIEW_LIMITS.preview_hostname ? hostname : "";
+  }
+  return preview;
+}
+
 async function captureNote(request: Request, env: Env): Promise<Response> {
   const contentType = request.headers.get("Content-Type") ?? "";
   if (!contentType.toLowerCase().startsWith("multipart/form-data;")) {
@@ -787,9 +808,14 @@ async function captureNote(request: Request, env: Env): Promise<Response> {
   const title = form.get("title");
   const url = form.get("url");
   const body = form.get("body") ?? "";
-  if (typeof title !== "string" || typeof url !== "string" || !url || typeof body !== "string") {
-    return json({ error: "メモの内容を確認してください。" }, 400);
+  if (typeof title !== "string" || title.length > 300) {
+    return json({ error: "タイトルを確認してください。" }, 400);
   }
+  if (typeof url !== "string" || !url || url.length > 2000) return json({ error: "URLを確認してください。" }, 400);
+  try {
+    if (!["http:", "https:"].includes(new URL(url).protocol)) return json({ error: "URLを確認してください。" }, 400);
+  } catch { return json({ error: "URLを確認してください。" }, 400); }
+  if (typeof body !== "string" || body.length > 100_000) return json({ error: "本文を確認してください。" }, 400);
   const pinned = form.get("pinned");
   if (pinned !== null && pinned !== "true" && pinned !== "false") {
     return json({ error: "ピン留めの指定を確認してください。" }, 400);
@@ -800,13 +826,9 @@ async function captureNote(request: Request, env: Env): Promise<Response> {
     if (typeof value !== "string" || value.length > 20_000) return json({ error: "ラベルを確認してください。" }, 400);
     try { labels = JSON.parse(value); } catch { return json({ error: "ラベルを確認してください。" }, 400); }
   }
-  const input = parseInput({ title, url, body, pinned: pinned === "true", archived: false, color: "default", labels,
-    preview_title: form.get("preview_title") ?? "",
-    preview_description: form.get("preview_description") ?? "",
-    preview_image: form.get("preview_image") ?? "",
-    preview_hostname: form.get("preview_hostname") ?? "",
-  });
-  if (!input) return json({ error: "メモの内容を確認してください。" }, 400);
+  const input = parseInput({ title, url, body, pinned: pinned === "true", archived: false, color: "default", labels });
+  if (!input) return json({ error: "ラベルを確認してください。" }, 400);
+  Object.assign(input, capturePreview(form, url));
   if (input.labels?.length) {
     const keys = input.labels.map(labelKey);
     const result = await env.DB.prepare(`SELECT name_key FROM labels WHERE name_key IN (${keys.map(() => "?").join(",")})`)

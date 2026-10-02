@@ -49,7 +49,7 @@ function isHttpUrl(value) {
 function pageHostname(value) {
   try {
     const parsed = new URL(value);
-    return isHttpUrl(value) ? parsed.hostname : "";
+    return isHttpUrl(value) && parsed.hostname.length <= 255 ? parsed.hostname : "";
   } catch {
     return "";
   }
@@ -61,6 +61,17 @@ function setSaveEnabled() {
 
 function limitText(value, maxLength) {
   return typeof value === "string" ? value.slice(0, maxLength) : "";
+}
+
+function previewText(value, maxLength) {
+  // Use single-line metadata so multipart newline conversion cannot exceed the limit.
+  return typeof value === "string" ? value.replace(/\r\n|\r|\n/g, " ").trim().slice(0, maxLength) : "";
+}
+
+function previewImageUrl(value) {
+  if (typeof value !== "string") return "";
+  const image = value.trim();
+  return image.length <= 2000 && isHttpUrl(image) ? image : "";
 }
 
 function labelKey(value) {
@@ -210,9 +221,9 @@ async function loadPage() {
       if (metadata && typeof metadata === "object") {
         if (isHttpUrl(metadata.href)) url.value = metadata.href;
         const metadataTitle = limitText(metadata.title, 300);
-        const metadataDescription = limitText(metadata.description, 500);
-        const metadataImage = isHttpUrl(metadata.image) ? limitText(metadata.image, 2000) : "";
-        const metadataHostname = limitText(metadata.hostname, 255);
+        const metadataDescription = previewText(metadata.description, 500);
+        const metadataImage = previewImageUrl(metadata.image);
+        const metadataHostname = pageHostname(url.value);
         if (!titleEdited && typeof metadata.title === "string") title.value = metadataTitle;
         pagePreview = {
           title: metadataTitle || pagePreview.title,
@@ -324,10 +335,10 @@ form.addEventListener("submit", async (event) => {
     data.set("body", body.value);
     data.set("pinned", pinned.checked ? "true" : "false");
     data.set("labels", JSON.stringify(selectedLabels));
-    data.set("preview_title", limitText(pagePreview.title || title.value, 300));
-    data.set("preview_description", limitText(pagePreview.description, 500));
-    data.set("preview_image", limitText(pagePreview.image, 2000));
-    data.set("preview_hostname", limitText(pagePreview.hostname || pageHostname(url.value), 255));
+    data.set("preview_title", previewText(pagePreview.title || title.value, 300));
+    data.set("preview_description", previewText(pagePreview.description, 500));
+    data.set("preview_image", previewImageUrl(pagePreview.image));
+    data.set("preview_hostname", pageHostname(url.value));
     if (selectedImage) data.set("image", selectedImage, selectedImage.name || "pasted.png");
     const response = await fetch(endpoint, {
       method: "POST",
