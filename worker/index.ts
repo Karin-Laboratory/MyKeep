@@ -773,13 +773,17 @@ async function captureNote(request: Request, env: Env): Promise<Response> {
   if (typeof title !== "string" || typeof url !== "string" || !url || typeof body !== "string") {
     return json({ error: "メモの内容を確認してください。" }, 400);
   }
+  const pinned = form.get("pinned");
+  if (pinned !== null && pinned !== "true" && pinned !== "false") {
+    return json({ error: "ピン留めの指定を確認してください。" }, 400);
+  }
   let labels: unknown = [];
   if (form.has("labels")) {
     const value = form.get("labels");
     if (typeof value !== "string" || value.length > 20_000) return json({ error: "ラベルを確認してください。" }, 400);
     try { labels = JSON.parse(value); } catch { return json({ error: "ラベルを確認してください。" }, 400); }
   }
-  const input = parseInput({ title, url, body, pinned: false, archived: false, color: "default", labels,
+  const input = parseInput({ title, url, body, pinned: pinned === "true", archived: false, color: "default", labels,
     preview_title: form.get("preview_title") ?? "",
     preview_description: form.get("preview_description") ?? "",
     preview_image: form.get("preview_image") ?? "",

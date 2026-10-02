@@ -21,9 +21,12 @@
       <label>メモ<textarea id="body" rows="1" maxlength="100000" placeholder="任意のメモ"></textarea></label>
       <section class="labels-field" aria-labelledby="labelsHeading">
         <span id="labelsHeading" class="field-label">ラベル</span>
-        <div class="label-picker">
-          <button id="labelToggle" type="button" class="label-picker-toggle" aria-expanded="false" aria-controls="labelOptions" disabled>ラベルを選択</button>
-          <div id="labelOptions" class="label-picker-menu" hidden></div>
+        <div class="label-pin-row">
+          <div class="label-picker">
+            <button id="labelToggle" type="button" class="label-picker-toggle" aria-expanded="false" aria-controls="labelOptions" disabled>ラベルを選択</button>
+            <div id="labelOptions" class="label-picker-menu" hidden></div>
+          </div>
+          <label class="pin-option"><input id="pinned" type="checkbox" />ピン留め</label>
         </div>
         <div id="selectedLabels" class="selected-labels" aria-live="polite"></div>
         <p id="labelStatus" class="label-status" role="status" aria-live="polite"></p>

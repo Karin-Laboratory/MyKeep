@@ -14,6 +14,9 @@ form { display: grid; gap: 12px; margin-top: 14px; }
 label { display: grid; gap: 5px; font-size: .85rem; font-weight: 600; }
 .labels-field { display: grid; gap: 5px; font-size: .85rem; font-weight: 600; }
 .field-label { display: block; }
+.label-pin-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+.pin-option { display: flex; align-items: center; gap: 6px; white-space: nowrap; font-weight: 400; }
+.pin-option input { width: 16px; height: 16px; margin: 0; padding: 0; flex: 0 0 auto; }
 input, textarea, button { font: inherit; }
 input, textarea { width: 100%; border: 1px solid #cecec8; border-radius: 7px; background: #fff; padding: 8px; color: #242424; font-weight: 400; }
 input[readonly] { background: #efefed; color: #555; }

@@ -7,6 +7,7 @@ const form = document.getElementById("captureForm");
 const title = document.getElementById("title");
 const url = document.getElementById("url");
 const body = document.getElementById("body");
+const pinned = document.getElementById("pinned");
 const labelPicker = document.querySelector(".label-picker");
 const labelToggle = document.getElementById("labelToggle");
 const labelOptions = document.getElementById("labelOptions");
@@ -178,6 +179,7 @@ async function loadPage() {
   title.value = "";
   url.value = "";
   body.value = "";
+  pinned.checked = false;
   pagePreview = { title: "", description: "", image: "", hostname: "" };
   hideSavedNoteLink();
   showStatus("");
@@ -315,6 +317,7 @@ form.addEventListener("submit", async (event) => {
     data.set("title", limitText(title.value, 300));
     data.set("url", url.value);
     data.set("body", body.value);
+    data.set("pinned", pinned.checked ? "true" : "false");
     data.set("labels", JSON.stringify(selectedLabels));
     data.set("preview_title", limitText(pagePreview.title || title.value, 300));
     data.set("preview_description", limitText(pagePreview.description, 500));
