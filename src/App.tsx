@@ -515,7 +515,7 @@ export default function App() {
         if (checkControllerRef.current === controller) checkControllerRef.current = null;
       }
     }
-    const interval = window.setInterval(() => { void checkForNewNotes(); }, 10_000);
+    const interval = window.setInterval(() => { void checkForNewNotes(); }, 30_000);
     const onFocus = () => { void checkForNewNotes(); };
     const onVisibility = () => { if (document.visibilityState === "visible") void checkForNewNotes(); };
     window.addEventListener("focus", onFocus);
