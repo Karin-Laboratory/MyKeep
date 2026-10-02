@@ -26,6 +26,7 @@ let availableLabels = [];
 let selectedLabels = [];
 let savedNoteUrl = "";
 let pagePreview = { title: "", description: "", image: "", hostname: "" };
+let titleEdited = false;
 
 function showStatus(message, error = false) {
   status.textContent = message;
@@ -176,6 +177,7 @@ async function loadLabels() {
 }
 
 async function loadPage() {
+  titleEdited = false;
   title.value = "";
   url.value = "";
   body.value = "";
@@ -192,9 +194,10 @@ async function loadPage() {
   save.disabled = true;
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    title.value = limitText(typeof tab?.title === "string" ? tab.title : "", 300);
+    const tabTitle = limitText(typeof tab?.title === "string" ? tab.title : "", 300);
+    if (!titleEdited) title.value = tabTitle;
     url.value = typeof tab?.url === "string" ? tab.url : "";
-    pagePreview = { title: title.value, description: "", image: "", hostname: pageHostname(url.value) };
+    pagePreview = { title: tabTitle, description: "", image: "", hostname: pageHostname(url.value) };
     save.disabled = true;
     if (!tab?.id || !isHttpUrl(url.value)) {
       setSaveEnabled();
@@ -210,9 +213,9 @@ async function loadPage() {
         const metadataDescription = limitText(metadata.description, 500);
         const metadataImage = isHttpUrl(metadata.image) ? limitText(metadata.image, 2000) : "";
         const metadataHostname = limitText(metadata.hostname, 255);
-        if (typeof metadata.title === "string") title.value = metadataTitle;
+        if (!titleEdited && typeof metadata.title === "string") title.value = metadataTitle;
         pagePreview = {
-          title: metadataTitle || title.value,
+          title: metadataTitle || pagePreview.title,
           description: metadataDescription,
           image: metadataImage,
           hostname: metadataHostname || pageHostname(url.value),
@@ -272,6 +275,8 @@ document.addEventListener("click", (event) => {
     labelOptions.hidden = true;
   }
 });
+
+title.addEventListener("input", () => { titleEdited = true; });
 
 void loadPage();
 void loadLabels();

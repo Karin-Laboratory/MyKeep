@@ -166,7 +166,7 @@ Access保護とAPIキーなし／誤ったキーでの拒否を確認してか�
 
 ## Chrome拡張
 
-現在の **MyKeep Capture v0.3.0** はChrome Manifest V3、Chrome 120以上に対応します。
+現在の **MyKeep Capture v0.3.2** はChrome Manifest V3、Chrome 120以上に対応します。
 
 ### 読み込み・設定
 
