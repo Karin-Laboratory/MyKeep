@@ -34,6 +34,37 @@ const COLOR_LABELS: Record<NoteColor, string> = {
 const PREVIEW_SETTING = "mykeep.richLinkPreview";
 const DARK_SETTING = "mykeep.darkMode";
 
+function layoutNoteGrids(root: HTMLElement) {
+  for (const grid of root.querySelectorAll<HTMLElement>(".grid")) {
+    const style = getComputedStyle(grid);
+    const columns = Number.parseInt(style.getPropertyValue("--card-columns"), 10);
+    const gap = Number.parseFloat(style.getPropertyValue("--card-gap"));
+    const cards = [...grid.querySelectorAll<HTMLElement>(":scope > .card")];
+    cards.forEach((card, index) => {
+      const column = String(index % columns + 1);
+      if (card.style.gridColumn !== column) card.style.gridColumn = column;
+    });
+    const heights = cards.map((card) => Math.ceil(card.getBoundingClientRect().height));
+    const bottoms = Array<number>(columns).fill(1);
+    let previousStart = 1;
+    cards.forEach((card, index) => {
+      const column = index % columns;
+      // Keep column order and never place a later card above an earlier card.
+      const start = Math.max(bottoms[column], previousStart + (index > 0 && column === 0 ? 1 : 0));
+      const row = `${start} / span ${heights[index]}`;
+      if (card.style.gridRow !== row) card.style.gridRow = row;
+      bottoms[column] = start + heights[index] + gap;
+      previousStart = start;
+    });
+  }
+}
+
+function restoreListAnchor(anchor: ScrollAnchor) {
+  const card = [...document.querySelectorAll<HTMLElement>(".card[data-note-id]")]
+    .find((element) => element.dataset.noteId === anchor.id);
+  window.scrollTo({ top: card ? window.scrollY + card.getBoundingClientRect().top - anchor.top : anchor.scrollY, behavior: "instant" });
+}
+
 function SettingsIcon() {
   return <svg className="settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="m9 3-.6 2.4-2 .9-2.2-.7-3 5.2 1.7 1.6v2.3l-1.7 1.6 3 5.2 2.2-.7 2 .9L9 24h6l.6-2.4 2-.9 2.2.7 3-5.2-1.7-1.6v-2.3l1.7-1.6-3-5.2-2.2.7-2-.9L15 3Z" transform="translate(2 0) scale(.83)" />
@@ -331,13 +362,28 @@ export default function App() {
 
   useEffect(() => { notesRef.current = notes; }, [notes]);
   useLayoutEffect(() => {
+    if (mainContentRef.current) layoutNoteGrids(mainContentRef.current);
     const anchor = scrollAnchorRef.current;
     if (!anchor) return;
     scrollAnchorRef.current = null;
-    const card = [...document.querySelectorAll<HTMLElement>(".card[data-note-id]")]
-      .find((element) => element.dataset.noteId === anchor.id);
-    window.scrollTo({ top: card ? window.scrollY + card.getBoundingClientRect().top - anchor.top : anchor.scrollY, behavior: "instant" });
-  }, [notes]);
+    restoreListAnchor(anchor);
+  }, [notes, view, selecting]);
+  useLayoutEffect(() => {
+    const root = mainContentRef.current;
+    if (!root) return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const anchor = captureListAnchor();
+        layoutNoteGrids(root);
+        restoreListAnchor(anchor);
+      });
+    });
+    observer.observe(root);
+    root.querySelectorAll<HTMLElement>(".card").forEach((card) => observer.observe(card));
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+  }, [notes, view, selecting]);
   useEffect(() => {
     setSelectedNoteIds(new Set());
     setSelecting(false);
