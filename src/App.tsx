@@ -25,7 +25,7 @@ type CreatedLabel = { label: string; created: boolean };
 type ScrollAnchor = { id: string | null; top: number; scrollY: number };
 type ViewerImage = Pick<Attachment, "id" | "url" | "filename"> & { kind: "attachment" | "preview" };
 
-const emptyNote: NoteDraft = { title: "", body: "", url: "", pinned: false, archived: false, color: "default", checklist: [] };
+const emptyNote: NoteDraft = { title: "", body: "", url: "", pinned: false, archived: false, color: "default", card_image: "auto", checklist: [] };
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
 const countFormat = new Intl.NumberFormat("ja-JP");
@@ -191,7 +191,22 @@ function listPath(view: View, search: string, label: string, offset: number): st
   return `/api/notes?${params}`;
 }
 
-function notePreview(note: Note, showTitle: boolean, showBody: boolean, showArchive = false) {
+type CardImage = { url: string; kind: "attachment" | "preview"; extra: number };
+
+function resolveCardImage(note: Note, preview: LinkPreview | null): CardImage | null {
+  const images = note.attachments.filter((item) => IMAGE_TYPES.includes(item.mime_type));
+  const extra = Math.max(0, images.length + (note.preview_image ? 1 : 0) - 1);
+  if (note.card_image === "preview" && note.preview_image) return { url: note.preview_image, kind: "preview", extra };
+  if (note.card_image?.startsWith("attachment:")) {
+    const selected = images.find((item) => item.id === note.card_image.slice(11));
+    if (selected) return { url: selected.url, kind: "attachment", extra };
+  }
+  // 未指定・参照先消失は従来の自動表示へ戻す。
+  if (images.length) return { url: images[0].url, kind: "attachment", extra: images.length - 1 };
+  return preview?.image ? { url: preview.image, kind: "preview", extra: 0 } : null;
+}
+
+function notePreview(note: Note, showTitle: boolean, showBody: boolean, showArchive = false, cardImage: CardImage | null = null) {
   const imageAttachments = note.attachments.filter((item) => IMAGE_TYPES.includes(item.mime_type));
   return <>
     {note.pinned && <span className="pin-label">📌 ピン留め</span>}
@@ -206,10 +221,10 @@ function notePreview(note: Note, showTitle: boolean, showBody: boolean, showArch
     {note.labels.length > 0 && <span className="label-list">
       {note.labels.map((label) => <span className="label-chip" key={label}>{label}</span>)}
     </span>}
-    {imageAttachments.length > 0 && (
+    {cardImage && (
       <span className="card-photo">
-        <img src={imageAttachments[0].url} alt="" loading="lazy" />
-        {imageAttachments.length > 1 && <span className="photo-count">+{imageAttachments.length - 1}</span>}
+        <img src={cardImage.url} alt="" loading="lazy" referrerPolicy={cardImage.kind === "preview" ? "no-referrer" : undefined} />
+        {cardImage.extra > 0 && <span className="photo-count">+{cardImage.extra}</span>}
       </span>
     )}
     {note.attachments.length > imageAttachments.length && <span className="pin-label">📎 添付ファイル {note.attachments.length - imageAttachments.length}件</span>}
@@ -732,6 +747,7 @@ export default function App() {
     setNewLabelName("");
     setDraft(note
       ? { title: note.title, body: note.body, url: note.url, pinned: note.pinned, archived: note.archived, color: note.color,
+        card_image: note.card_image ?? "auto",
         checklist: note.checklist.map(({ text, checked }) => ({ text, checked })) }
       : { ...emptyNote, archived: view === "archived" });
   }
@@ -956,6 +972,8 @@ export default function App() {
       const { note } = editingId
         ? await api<{ note: Note }>(`/api/notes/${editingId}`, { method: "PATCH", body: JSON.stringify(input) })
         : await api<{ note: Note }>("/api/notes", { method: "POST", body: JSON.stringify(input) });
+      setDraft((current) => current ? { ...current, card_image: note.card_image } : current);
+      setEditorPreviewImage(note.preview_image);
       if (!editingId) {
         setEditingId(note.id);
         setDraft((current) => current ? { ...current, title } : current);
@@ -1302,8 +1320,10 @@ export default function App() {
     try {
       await api(`/api/notes/${editingId}/attachments/${attachment.id}`, { method: "DELETE" });
       setEditorAttachments((current) => current.filter((item) => item.id !== attachment.id));
+      setDraft((current) => current?.card_image === `attachment:${attachment.id}` ? { ...current, card_image: "auto" } : current);
       setNotes((current) => current.map((note) => note.id === editingId
-        ? { ...note, attachments: note.attachments.filter((item) => item.id !== attachment.id) }
+        ? { ...note, card_image: note.card_image === `attachment:${attachment.id}` ? "auto" : note.card_image,
+          attachments: note.attachments.filter((item) => item.id !== attachment.id) }
         : note));
       reloadList();
     } catch (cause) {
@@ -1439,6 +1459,8 @@ export default function App() {
 
   function renderNoteCard(note: Note) {
     const visiblePreview = richLinkPreview ? mergeLinkPreview(note, previews[note.url]) : null;
+    const cardImage = resolveCardImage(note, visiblePreview);
+    const contentImage = cardImage?.kind === "preview" && note.url && visiblePreview ? null : cardImage;
     const remainingDays = view === "trash" ? trashRemainingDays(note.deleted_at) : null;
     const selected = selectedNoteIds.has(note.id);
     return (
@@ -1447,14 +1469,16 @@ export default function App() {
         {selecting && <button type="button" className="card-select" aria-label={`${note.title || "無題のメモ"}${selected ? "の選択を解除" : "を選択"}`}
           aria-pressed={selected} disabled={working} onClick={(event) => { event.stopPropagation(); toggleNoteSelection(note.id); }}>{selected ? "✓" : ""}</button>}
         {view === "trash" || selecting
-          ? <div className="card-content">{notePreview(note, cardShowTitle, cardShowBody, Boolean(labelFilter))}</div>
-          : <button className="card-content" onClick={() => openEditor(note)} aria-label={`${note.title || "無題のメモ"}を編集`}>{notePreview(note, cardShowTitle, cardShowBody, Boolean(labelFilter))}</button>}
+          ? <div className="card-content">{notePreview(note, cardShowTitle, cardShowBody, Boolean(labelFilter), contentImage)}</div>
+          : <button className="card-content" onClick={() => openEditor(note)} aria-label={`${note.title || "無題のメモ"}を編集`}>{notePreview(note, cardShowTitle, cardShowBody, Boolean(labelFilter), contentImage)}</button>}
         {note.url && (visiblePreview
           ? <a className="link-preview" href={note.url} target="_blank" rel="noopener noreferrer"
               tabIndex={selecting ? -1 : undefined} onClick={selecting ? (event) => event.preventDefault() : undefined}
               onAuxClick={selecting ? (event) => event.preventDefault() : undefined}>
-              {visiblePreview.image && !note.attachments.some((attachment) => IMAGE_TYPES.includes(attachment.mime_type))
-                && <img src={visiblePreview.image} alt="" loading="lazy" referrerPolicy="no-referrer" />}
+              {cardImage?.kind === "preview" && <span className="link-preview-photo">
+                <img src={cardImage.url} alt="" loading="lazy" referrerPolicy="no-referrer" />
+                {cardImage.extra > 0 && <span className="photo-count">+{cardImage.extra}</span>}
+              </span>}
               <span className="link-preview-details">
                 <strong>{displayLinkTitle(visiblePreview, note.title)}</strong>
                 <small>{visiblePreview.hostname}</small>
@@ -1760,6 +1784,11 @@ export default function App() {
               </div>
               {(editorAttachments.length > 0 || editorPreviewImage) && <>
                 <small className="image-group-label">保存済み</small>
+                <div className="card-image-choice" role="group" aria-label="カードに表示する画像">
+                  <span>カードに表示する画像</span>
+                  <label><input type="radio" name="card-image" value="auto" checked={(draft.card_image ?? "auto") === "auto"} disabled={working}
+                    onChange={() => setDraft({ ...draft, card_image: "auto" })} />自動</label>
+                </div>
                 <div className="editor-images">
                     {editorAttachments.map((attachment) => (
                       <div className="editor-image" key={attachment.id}>
@@ -1767,11 +1796,17 @@ export default function App() {
                           ? <button type="button" className="image-thumbnail" aria-label={`${attachment.filename}を拡大表示`} onClick={() => setViewerImageId(attachment.id)}><img src={attachment.url} alt={attachment.filename} loading="lazy" /></button>
                           : <a href={attachment.url} download={attachment.filename}>{attachment.filename}</a>}
                         <button type="button" onClick={() => removeImage(attachment)} disabled={working} aria-label={`${attachment.filename}を削除`}>削除</button>
+                        {IMAGE_TYPES.includes(attachment.mime_type) && <label className="card-image-radio">
+                          <input type="radio" name="card-image" value={`attachment:${attachment.id}`} checked={draft.card_image === `attachment:${attachment.id}`} disabled={working}
+                            aria-label={`${attachment.filename}をカードに表示`} onChange={() => setDraft({ ...draft, card_image: `attachment:${attachment.id}` })} />カードに表示
+                        </label>}
                       </div>
                     ))}
                     {editorPreviewImage && <div className="editor-image">
                       <button type="button" className="image-thumbnail" aria-label="サムネイルを拡大表示" onClick={() => setViewerImageId("link-preview")}><img src={editorPreviewImage} alt="リンクサムネイル" loading="lazy" referrerPolicy="no-referrer" /></button>
                       <small className="image-group-label">サムネイル</small>
+                      <label className="card-image-radio"><input type="radio" name="card-image" value="preview" checked={draft.card_image === "preview"} disabled={working}
+                        aria-label="サムネイルをカードに表示" onChange={() => setDraft({ ...draft, card_image: "preview" })} />カードに表示</label>
                     </div>}
                 </div>
               </>}

@@ -17,6 +17,7 @@ export type ChecklistInput = Pick<ChecklistItem, "text" | "checked">;
 
 export const NOTE_COLORS = ["default", "red", "orange", "yellow", "green", "blue", "purple"] as const;
 export type NoteColor = (typeof NOTE_COLORS)[number];
+export type CardImageChoice = "auto" | "preview" | `attachment:${string}`;
 
 export interface NotePreview {
   preview_title: string;
@@ -26,6 +27,7 @@ export interface NotePreview {
 }
 
 export interface Note extends NotePreview {
+  card_image: CardImageChoice;
   id: string;
   title: string;
   body: string;
@@ -42,6 +44,7 @@ export interface Note extends NotePreview {
 }
 
 export type NoteInput = Pick<Note, "title" | "body" | "url" | "pinned" | "archived" | "color"> & Partial<NotePreview> & {
+  card_image?: CardImageChoice;
   checklist?: ChecklistInput[];
   labels?: string[];
 };

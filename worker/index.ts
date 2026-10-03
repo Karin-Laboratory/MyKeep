@@ -1,8 +1,9 @@
 import { NOTE_COLORS } from "../src/types";
 import { linkPreview } from "./linkPreview";
-import type { Attachment, ChecklistItem, Note, NoteColor, NoteInput, NotePreview } from "../src/types";
+import type { Attachment, CardImageChoice, ChecklistItem, Note, NoteColor, NoteInput, NotePreview } from "../src/types";
 
 interface NoteRow extends NotePreview {
+  card_image: CardImageChoice;
   id: string;
   title: string;
   body: string;
@@ -43,7 +44,7 @@ interface LabelRow {
   name: string;
 }
 
-const SELECT_NOTE = "SELECT id, title, body, url, pinned, archived, color, deleted_at, created_at, updated_at, preview_title, preview_description, preview_image, preview_hostname FROM notes";
+const SELECT_NOTE = "SELECT id, title, body, url, pinned, archived, color, deleted_at, created_at, updated_at, preview_title, preview_description, preview_image, preview_hostname, card_image FROM notes";
 const PAGE_SIZE = 50;
 const MAX_SEARCH_LENGTH = 200;
 const MAX_CHECKLIST_ITEMS = 500;
@@ -158,6 +159,9 @@ function parseInput(value: unknown, current?: NoteRow, allowEmpty = false): Note
   const pinned = input.pinned ?? (current ? current.pinned === 1 : false);
   const archived = input.archived ?? (current ? current.archived === 1 : false);
   const color = input.color ?? current?.color ?? "default";
+  let cardImage = input.card_image === undefined ? current?.card_image ?? "auto" : input.card_image;
+  if (cardImage !== "auto" && cardImage !== "preview"
+    && !(typeof cardImage === "string" && cardImage.startsWith("attachment:") && isStrictUuid(cardImage.slice(11)))) return null;
 
   let checklist: NoteInput["checklist"];
   if (input.checklist !== undefined) {
@@ -218,7 +222,21 @@ function parseInput(value: unknown, current?: NoteRow, allowEmpty = false): Note
   } else if (Object.values(preview).some(Boolean)) {
     preview.preview_hostname = new URL(url).hostname;
   }
-  return { title, body, url, pinned, archived, color: color as NoteColor, checklist, labels, ...preview };
+  if (cardImage === "preview" && !preview.preview_image) {
+    // URL変更・サムネイル消去では既存のpreview選択を自動へ戻す。
+    if (current?.card_image === "preview" && (current.url !== url || input.preview_image === "")) cardImage = "auto";
+    else return null;
+  }
+  return { title, body, url, pinned, archived, color: color as NoteColor, card_image: cardImage as CardImageChoice, checklist, labels, ...preview };
+}
+
+async function validCardImage(input: NoteInput, env: Env, noteId?: string): Promise<boolean> {
+  const choice = input.card_image ?? "auto";
+  if (!choice.startsWith("attachment:")) return true;
+  if (!noteId) return false;
+  const attachment = await env.DB.prepare("SELECT mime_type FROM attachments WHERE id = ? AND note_id = ?")
+    .bind(choice.slice(11), noteId).first<{ mime_type: string }>();
+  return !!attachment && IMAGE_TYPES.has(attachment.mime_type);
 }
 
 async function withRelations(rows: NoteRow[], env: Env): Promise<Note[]> {
@@ -465,9 +483,9 @@ async function insertNote(input: NoteInput, env: Env, timestamps?: { created_at:
   const createdAt = timestamps?.created_at ?? now;
   const updatedAt = timestamps?.updated_at ?? now;
   const statements = [env.DB.prepare(
-    "INSERT INTO notes (id, title, body, url, pinned, archived, color, deleted_at, created_at, updated_at, preview_title, preview_description, preview_image, preview_hostname) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO notes (id, title, body, url, pinned, archived, color, deleted_at, created_at, updated_at, preview_title, preview_description, preview_image, preview_hostname, card_image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   ).bind(id, input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, deletedAt, createdAt, updatedAt,
-    input.preview_title ?? "", input.preview_description ?? "", input.preview_image ?? "", input.preview_hostname ?? ""),
+    input.preview_title ?? "", input.preview_description ?? "", input.preview_image ?? "", input.preview_hostname ?? "", input.card_image ?? "auto"),
   ...relationStatements(id, input, env, false, existingLabelsOnly)];
   await env.DB.batch(statements);
   const row = await env.DB.prepare(`${SELECT_NOTE} WHERE id = ?`).bind(id).first<NoteRow>();
@@ -477,6 +495,7 @@ async function insertNote(input: NoteInput, env: Env, timestamps?: { created_at:
 async function createNote(request: Request, env: Env): Promise<Response> {
   const input = parseInput(await readInput(request));
   if (!input) return json({ error: "メモの内容を確認してください。" }, 400);
+  if (!await validCardImage(input, env)) return json({ error: "カード画像を確認してください。" }, 400);
   return json({ note: await insertNote(input, env) }, 201);
 }
 
@@ -499,7 +518,7 @@ async function importKeepNote(request: Request, env: Env): Promise<Response> {
     || new Date(created_at).toISOString() !== created_at || new Date(updated_at).toISOString() !== updated_at) {
     return json({ error: "日時を確認してください。" }, 400);
   }
-  return json({ note: await insertNote(input, env, { created_at, updated_at }, isTrashed ? new Date().toISOString() : null) }, 201);
+  return json({ note: await insertNote({ ...input, card_image: "auto" }, env, { created_at, updated_at }, isTrashed ? new Date().toISOString() : null) }, 201);
 }
 
 async function updateNote(id: string, request: Request, env: Env): Promise<Response> {
@@ -507,12 +526,13 @@ async function updateNote(id: string, request: Request, env: Env): Promise<Respo
   if (!current) return json({ error: "メモが見つかりません。" }, 404);
   const input = parseInput(await readInput(request), current);
   if (!input) return json({ error: "メモの内容を確認してください。" }, 400);
+  if (!await validCardImage(input, env, id)) return json({ error: "カード画像を確認してください。" }, 400);
 
   const now = new Date().toISOString();
   await env.DB.batch([env.DB.prepare(
-    "UPDATE notes SET title = ?, body = ?, url = ?, pinned = ?, archived = ?, color = ?, updated_at = ?, preview_title = ?, preview_description = ?, preview_image = ?, preview_hostname = ? WHERE id = ? AND deleted_at IS NULL",
+    "UPDATE notes SET title = ?, body = ?, url = ?, pinned = ?, archived = ?, color = ?, updated_at = ?, preview_title = ?, preview_description = ?, preview_image = ?, preview_hostname = ?, card_image = ? WHERE id = ? AND deleted_at IS NULL",
   ).bind(input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, now,
-    input.preview_title, input.preview_description, input.preview_image, input.preview_hostname, id),
+    input.preview_title, input.preview_description, input.preview_image, input.preview_hostname, input.card_image, id),
   ...relationStatements(id, input, env, true)]);
   const row = await env.DB.prepare(`${SELECT_NOTE} WHERE id = ?`).bind(id).first<NoteRow>();
   return json({ note: (await withRelations([row!], env))[0] });
@@ -953,7 +973,11 @@ async function deleteAttachment(noteId: string, attachmentId: string, env: Env):
   ).bind(attachmentId, noteId).first<{ r2_key: string }>();
   if (!row) return json({ error: "画像が見つかりません。" }, 404);
   await env.IMAGES.delete(row.r2_key);
-  await env.DB.prepare("DELETE FROM attachments WHERE id = ? AND note_id = ?").bind(attachmentId, noteId).run();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE notes SET card_image = 'auto', updated_at = ? WHERE id = ? AND card_image = ?")
+      .bind(new Date().toISOString(), noteId, `attachment:${attachmentId}`),
+    env.DB.prepare("DELETE FROM attachments WHERE id = ? AND note_id = ?").bind(attachmentId, noteId),
+  ]);
   return json({ ok: true });
 }
 
