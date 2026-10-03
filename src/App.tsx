@@ -22,6 +22,7 @@ type BulkOperation = "archive" | "unarchive" | "trash" | "restore" | "permanent"
 type BulkResult = { message: string; failed: number };
 type CreatedLabel = { label: string; created: boolean };
 type ScrollAnchor = { id: string | null; top: number; scrollY: number };
+type ViewerImage = Pick<Attachment, "id" | "url" | "filename"> & { kind: "attachment" | "preview" };
 
 const emptyNote: NoteDraft = { title: "", body: "", url: "", pinned: false, archived: false, color: "default", checklist: [] };
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -80,7 +81,7 @@ function SettingsIcon() {
   </svg>;
 }
 
-function ImageViewer({ images, initialIndex, onClose }: { images: Attachment[]; initialIndex: number; onClose: () => void }) {
+function ImageViewer({ images, initialIndex, onClose }: { images: ViewerImage[]; initialIndex: number; onClose: () => void }) {
   const [index, setIndex] = useState(initialIndex);
   const closeRef = useRef<HTMLButtonElement>(null);
   const touchRef = useRef<{ x: number; y: number } | null>(null);
@@ -113,6 +114,7 @@ function ImageViewer({ images, initialIndex, onClose }: { images: Attachment[]; 
     onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="image-viewer-toolbar">
       <span aria-live="polite">{index + 1} / {images.length}</span>
+      {image.kind === "preview" && <a href={image.url} target="_blank" rel="noopener noreferrer">元画像を開く</a>}
       <button type="button" ref={closeRef} aria-label="画像ビューアを閉じる" title="閉じる" onClick={onClose}>×</button>
     </div>
     <div className="image-viewer-stage"
@@ -125,7 +127,7 @@ function ImageViewer({ images, initialIndex, onClose }: { images: Attachment[]; 
         const dx = end.clientX - start.x;
         if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(end.clientY - start.y)) move(dx < 0 ? 1 : -1);
       }} onTouchCancel={() => { touchRef.current = null; }}>
-      <img src={image.url} alt={image.filename} draggable={false} />
+      <img src={image.url} alt={image.filename} draggable={false} referrerPolicy={image.kind === "preview" ? "no-referrer" : undefined} />
     </div>
     <div className="image-viewer-navigation">
       <button type="button" disabled={images.length < 2} onClick={() => move(-1)} aria-label="前の画像">← 前</button>
@@ -297,6 +299,7 @@ export default function App() {
   const [creatingLabel, setCreatingLabel] = useState(false);
   const [newLabelName, setNewLabelName] = useState("");
   const [editorAttachments, setEditorAttachments] = useState<Attachment[]>([]);
+  const [editorPreviewImage, setEditorPreviewImage] = useState("");
   const [viewerImageId, setViewerImageId] = useState<string | null>(null);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [draggingImage, setDraggingImage] = useState(false);
@@ -697,6 +700,7 @@ export default function App() {
 
   function closeEditor() {
     setViewerImageId(null);
+    setEditorPreviewImage("");
     clearPendingImages();
     setDraft(null);
     setLabelMenuOpen(false);
@@ -710,6 +714,7 @@ export default function App() {
     clearPendingImages();
     setEditingId(note?.id ?? null);
     setEditorAttachments(note?.attachments ?? []);
+    setEditorPreviewImage(note?.preview_image ?? "");
     setSelectedLabels(note?.labels ?? []);
     setLabelMenuOpen(false);
     setCreatingLabel(false);
@@ -975,17 +980,29 @@ export default function App() {
 
   async function updateFlag(note: Note, field: "pinned" | "archived") {
     if (working) return;
+    const pinAnchor = field === "pinned" ? captureListAnchor(note.id) : null;
+    const undoPin = field === "pinned" && note.pinned;
     setWorking(true);
     setError("");
-    if (field === "archived") setUndoAction(null);
+    if (field === "archived" || undoPin) setUndoAction(null);
     try {
       await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify({ [field]: !note[field] }) });
+      if (pinAnchor) scrollAnchorRef.current = pinAnchor;
       reloadList();
       if (field === "archived") {
         setUndoAction({
           message: note.archived ? "アーカイブから戻しました。" : "アーカイブしました。",
           undo: async () => {
             await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify({ archived: note.archived }) });
+          },
+        });
+      } else if (undoPin) {
+        setUndoAction({
+          message: "ピンを解除しました。",
+          undo: async () => {
+            const anchor = captureListAnchor(note.id);
+            await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify({ pinned: true }) });
+            scrollAnchorRef.current = anchor;
           },
         });
       }
@@ -1376,7 +1393,9 @@ export default function App() {
     all.findIndex((candidate) => labelKey(candidate) === labelKey(name)) === index);
   const deleteLabelNames = availableLabels.filter((name) => labelsToDelete.includes(labelKey(name)));
   const labelManagerBusy = deletingLabels || creatingStandaloneLabel || renamingLabel || working || undoing;
-  const viewerImages = editorAttachments.filter((attachment) => IMAGE_TYPES.includes(attachment.mime_type));
+  const viewerImages: ViewerImage[] = editorAttachments.filter((attachment) => IMAGE_TYPES.includes(attachment.mime_type))
+    .map(({ id, url, filename }) => ({ id, url, filename, kind: "attachment" }));
+  if (editorPreviewImage) viewerImages.push({ id: "link-preview", url: editorPreviewImage, filename: "サムネイル", kind: "preview" });
   const pinnedNotes = notes.filter((note) => note.pinned);
   const otherNotes = notes.filter((note) => !note.pinned);
   const selectedActiveCount = notes.filter((note) => selectedNoteIds.has(note.id) && !note.archived).length;
@@ -1692,7 +1711,7 @@ export default function App() {
                 </label>
                 <span className="image-hint">Ctrl+Vで貼り付け / ここへドラッグ＆ドロップ</span>
               </div>
-              {editorAttachments.length > 0 && <>
+              {(editorAttachments.length > 0 || editorPreviewImage) && <>
                 <small className="image-group-label">保存済み</small>
                 <div className="editor-images">
                     {editorAttachments.map((attachment) => (
@@ -1703,6 +1722,10 @@ export default function App() {
                         <button type="button" onClick={() => removeImage(attachment)} disabled={working} aria-label={`${attachment.filename}を削除`}>削除</button>
                       </div>
                     ))}
+                    {editorPreviewImage && <div className="editor-image">
+                      <button type="button" className="image-thumbnail" aria-label="サムネイルを拡大表示" onClick={() => setViewerImageId("link-preview")}><img src={editorPreviewImage} alt="リンクサムネイル" loading="lazy" referrerPolicy="no-referrer" /></button>
+                      <small className="image-group-label">サムネイル</small>
+                    </div>}
                 </div>
               </>}
               {pendingImages.length > 0 && <>
