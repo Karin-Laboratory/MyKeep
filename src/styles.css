@@ -28,15 +28,20 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 700; }
 .app-layout { display: flex; align-items: flex-start; gap: 24px; padding-top: 20px; }
 .sidebar { position: sticky; top: calc(var(--topbar-height) + 20px); flex: 0 0 232px; max-height: calc(100dvh - var(--topbar-height) - 40px); overflow-y: auto; }
 .sidebar-title { display: none; }
-.sidebar-nav { display: grid; gap: 3px; }
+.sidebar-nav { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; }
 .sidebar-nav button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 42px; border: 0; border-radius: 9px; background: transparent; color: #444; padding: 8px 12px; text-align: left; overflow-wrap: anywhere; }
 .sidebar-nav button span { flex: 0 0 22px; text-align: center; }
+.sidebar-nav button .nav-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.sidebar-nav button .nav-count { flex: 0 0 auto; margin-left: auto; text-align: right; font-variant-numeric: tabular-nums; font-size: .82rem; }
 .sidebar-nav button:hover { background: #eeeee8; }
 .sidebar-nav button.selected { background: #fff2c5; color: #282216; font-weight: 700; }
 .sidebar-labels { margin-top: 22px; }
 .sidebar-labels h2 { margin: 0 0 8px; padding: 0 12px; color: #777; font-size: .84rem; font-weight: 600; }
 .sidebar-scrim { display: none; }
 .main-content { flex: 1; min-width: 0; }
+.trash-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 16px; }
+.trash-header p { margin: 0; font-size: .88rem; color: #777; }
+.trash-header .danger { margin: 0; border: 1px solid currentColor; border-radius: 8px; padding: 8px 12px; }
 .bulk-toolbar button { border: 1px solid #cecec8; border-radius: 8px; background: white; color: inherit; padding: 8px 12px; }
 .bulk-result { color: #666; font-size: .9rem; }
 .selecting .main-content { padding-bottom: 190px; }
@@ -274,6 +279,7 @@ h2 { margin: 0; font-size: 1.15rem; }
 :root[data-theme="dark"] .card-actions button.danger, :root[data-theme="dark"] .checklist-row button, :root[data-theme="dark"] .editor-image button, :root[data-theme="dark"] .danger { color: #ffaaaa; }
 :root[data-theme="dark"] .error { color: #ffb3af; background: #512d2d; }
 :root[data-theme="dark"] .trash-countdown { color: #bcbdbd; }
+:root[data-theme="dark"] .trash-header p { color: #bcbdbd; }
 :root[data-theme="dark"] .close { color: #eeeae0; }
 :root[data-theme="dark"] .standalone-label-creator .new-label-row input { background: #282a2d; border-color: #55595d; color: #f4f1e9; }
 :root[data-theme="dark"] .bulk-toolbar { background: #26282b; border-color: #55595d; }

@@ -13,6 +13,7 @@ import type { Attachment, ChecklistInput, Note, NoteColor, NoteInput } from "./t
 type View = "active" | "unpinned" | "imageless" | "archived" | "trash";
 type NoteList = { notes: Note[]; hasMore: boolean };
 type NoteCheck = { notes: Pick<Note, "id" | "updated_at">[] };
+type SidebarCounts = { views: Record<View, number>; labels: Record<string, number> };
 type ImportCounts = { done: number; total: number; success: number; failed: number; skipped: number };
 type ImportProgress = { notes: ImportCounts & { trashed: number }; attachments: ImportCounts };
 type NoteDraft = NoteInput & { checklist: ChecklistInput[] };
@@ -27,6 +28,7 @@ type ViewerImage = Pick<Attachment, "id" | "url" | "filename"> & { kind: "attach
 const emptyNote: NoteDraft = { title: "", body: "", url: "", pinned: false, archived: false, color: "default", checklist: [] };
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
+const countFormat = new Intl.NumberFormat("ja-JP");
 const IMAGE_EXTENSIONS: Record<string, string> = {
   "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/avif": "avif",
 };
@@ -149,7 +151,7 @@ function trashRemainingDays(deletedAt: string | null): number | null {
   const deleted = deletedAt ? Date.parse(deletedAt) : NaN;
   if (!Number.isFinite(deleted)) return null;
   const day = 24 * 60 * 60 * 1000;
-  return Math.max(0, Math.ceil((deleted + 30 * day - Date.now()) / day));
+  return Math.max(0, Math.ceil((deleted + 7 * day - Date.now()) / day));
 }
 
 function savedSetting(key: string, fallback: boolean): boolean {
@@ -271,6 +273,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [labelFilter, setLabelFilter] = useState("");
   const [availableLabels, setAvailableLabels] = useState<string[]>([]);
+  const [counts, setCounts] = useState<SidebarCounts | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [notes, setNotes] = useState<Note[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -522,6 +525,14 @@ export default function App() {
           && current !== preservedLabelFilterRef.current ? "" : current);
       })
       .catch(() => setAvailableLabels([]));
+  }, [reload]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api<SidebarCounts>("/api/counts", { signal: controller.signal })
+      .then((data) => { if (!controller.signal.aborted) setCounts(data); })
+      .catch(() => { /* 件数取得の失敗では表示中の一覧を変えない。 */ });
+    return () => controller.abort();
   }, [reload]);
 
   useEffect(() => {
@@ -1211,6 +1222,30 @@ export default function App() {
     }
   }
 
+  async function clearTrash() {
+    if (working || importing || exporting) return;
+    setWorking(true);
+    setError("");
+    try {
+      const current = await api<SidebarCounts>("/api/counts");
+      setCounts(current);
+      if (!current.views.trash || !window.confirm(`ゴミ箱内の${countFormat.format(current.views.trash)}件のメモを完全に削除しますか？\nこの操作は取り消せません。`)) return;
+      setUndoAction(null);
+      const result = await api<{ deleted: number; failed: number }>("/api/trash", { method: "DELETE" });
+      endSelection();
+      setBulkResult(null);
+      reloadList();
+      if (result.failed) setBulkResult({ message: `${result.deleted}件を完全削除しました。${result.failed}件の削除に失敗しました。残ったメモは再試行できます。`, failed: result.failed });
+      else setUndoAction({ message: "ゴミ箱を空にしました。" });
+    } catch (cause) {
+      // 応答が途切れた場合も、削除できた分を再取得して反映する。
+      reloadList();
+      setBulkResult({ message: cause instanceof Error ? cause.message : "ゴミ箱を空にできませんでした。", failed: 1 });
+    } finally {
+      setWorking(false);
+    }
+  }
+
   function queueImages(files: File[]) {
     if (working || !files.length) return;
     const valid: PendingImage[] = [];
@@ -1270,6 +1305,7 @@ export default function App() {
       setNotes((current) => current.map((note) => note.id === editingId
         ? { ...note, attachments: note.attachments.filter((item) => item.id !== attachment.id) }
         : note));
+      reloadList();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "画像の削除に失敗しました。");
     } finally {
@@ -1477,22 +1513,33 @@ export default function App() {
         <aside id="sidebar" ref={sidebarRef} className={`sidebar${menuOpen ? " open" : ""}`} aria-label="サイドバー">
           <div className="sidebar-title">MyKeep</div>
           <nav className="sidebar-nav" aria-label="メモの表示">
-            <button type="button" className={view === "active" && !labelFilter ? "selected" : ""} aria-current={view === "active" && !labelFilter ? "page" : undefined} onClick={() => selectView("active")}><span aria-hidden="true">💡</span>メモ</button>
-            <button type="button" className={view === "unpinned" ? "selected" : ""} aria-current={view === "unpinned" ? "page" : undefined} onClick={() => selectView("unpinned")}><span aria-hidden="true">○</span>ピンなし</button>
-            <button type="button" className={view === "imageless" ? "selected" : ""} aria-current={view === "imageless" ? "page" : undefined} onClick={() => selectView("imageless")}><span aria-hidden="true">▧</span>画像なし</button>
-            <button type="button" className={view === "archived" ? "selected" : ""} aria-current={view === "archived" ? "page" : undefined} onClick={() => selectView("archived")}><span aria-hidden="true">📦</span>アーカイブ</button>
-            <button type="button" className={view === "trash" ? "selected" : ""} aria-current={view === "trash" ? "page" : undefined} onClick={() => selectView("trash")}><span aria-hidden="true">🗑</span>ゴミ箱</button>
+            {([
+              ["active", "💡", "メモ"], ["unpinned", "○", "ピンなし"], ["imageless", "▧", "画像なし"],
+              ["archived", "📦", "アーカイブ"], ["trash", "🗑", "ゴミ箱"],
+            ] as const).map(([itemView, icon, name]) => <button type="button" key={itemView}
+              className={view === itemView && !labelFilter ? "selected" : ""}
+              aria-current={view === itemView && !labelFilter ? "page" : undefined} onClick={() => selectView(itemView)}>
+              <span aria-hidden="true">{icon}</span><span className="nav-name">{name}</span>
+              <span className="nav-count">{counts ? countFormat.format(counts.views[itemView]) : "—"}</span>
+            </button>)}
           </nav>
           <div className="sidebar-labels">
             <h2>ラベル</h2>
             <nav className="sidebar-nav" aria-label="ラベル">
-              {availableLabels.map((name) => <button type="button" className={view === "active" && labelFilter === name ? "selected" : ""} aria-current={view === "active" && labelFilter === name ? "page" : undefined} onClick={() => selectLabel(name)} key={name}><span aria-hidden="true">🏷</span>{name}</button>)}
+              {availableLabels.map((name) => <button type="button" className={view === "active" && labelFilter === name ? "selected" : ""} aria-current={view === "active" && labelFilter === name ? "page" : undefined} onClick={() => selectLabel(name)} key={name} title={name}>
+                <span aria-hidden="true">🏷</span><span className="nav-name">{name}</span>
+                <span className="nav-count">{counts ? countFormat.format(Object.hasOwn(counts.labels, name) ? counts.labels[name] : 0) : "—"}</span>
+              </button>)}
               <button type="button" onClick={openLabelManager}><SettingsIcon />ラベル整理</button>
             </nav>
           </div>
         </aside>
         <div className="main-content" ref={mainContentRef}>
       {(pullDistance > 0 || pullRefreshing) && <div className="pull-indicator" role="status" style={{ height: pullRefreshing ? 38 : Math.min(pullDistance, 80) }}>↻ {pullRefreshing ? "更新中…" : pullDistance >= 70 ? "離して更新" : "引っ張って更新"}</div>}
+      {view === "trash" && <div className="trash-header">
+        <p>ゴミ箱内のメモは7日後に削除されます。</p>
+        <button type="button" className="danger" disabled={working || importing || exporting || !counts?.views.trash} onClick={() => void clearTrash()}>ゴミ箱を空にする</button>
+      </div>}
       {bulkResult && <p className={bulkResult.failed ? "error" : "bulk-result"} role={bulkResult.failed ? "alert" : "status"}>{bulkResult.message}</p>}
       {error && !draft && <p className="error" role="alert">{error}</p>}
       {!loading && notes.length === 0 && <p className="empty">{search.trim() || labelFilter ? "該当するメモはありません。" : view === "active" ? "メモはまだありません。" : view === "unpinned" ? "ピンなしのメモはありません。" : view === "imageless" ? "画像なしのメモはありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}

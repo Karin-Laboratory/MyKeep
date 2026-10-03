@@ -307,6 +307,21 @@ async function checkNotes(request: Request, env: Env): Promise<Response> {
   return json({ notes: result.results ?? [] });
 }
 
+async function sidebarCounts(env: Env): Promise<Response> {
+  const views = ["active", "unpinned", "imageless", "archived", "trash"];
+  const filters = views.map((view) => noteListFilter(new URLSearchParams({ view }))!);
+  const [viewCounts, labelCounts] = await env.DB.batch([
+    env.DB.prepare(`SELECT ${filters.map((filter, index) =>
+      `COALESCE(SUM(CASE WHEN ${filter.where} THEN 1 ELSE 0 END), 0) AS ${views[index]}`).join(", ")} FROM notes`)
+      .bind(...filters.flatMap((filter) => filter.bindings)),
+    env.DB.prepare("SELECT l.name, COUNT(n.id) AS count FROM labels l LEFT JOIN note_labels nl ON nl.label_key = l.name_key LEFT JOIN notes n ON n.id = nl.note_id AND n.deleted_at IS NULL GROUP BY l.name_key, l.name"),
+  ]);
+  return json({
+    views: viewCounts.results[0],
+    labels: Object.fromEntries((labelCounts.results as { name: string; count: number }[]).map((row) => [row.name, row.count])),
+  });
+}
+
 async function listLabels(env: Env): Promise<Response> {
   const result = await env.DB.prepare(
     "SELECT name FROM labels ORDER BY name",
@@ -506,7 +521,7 @@ async function updateNote(id: string, request: Request, env: Env): Promise<Respo
 async function moveToTrash(id: string, request: Request, env: Env): Promise<Response> {
   const now = new Date().toISOString();
   let deletedAt = now;
-  // 復元のUndoでは元のゴミ箱日時を戻し、30日の削除期限を維持する。
+  // 復元のUndoでは元のゴミ箱日時を戻し、7日の削除期限を維持する。
   const bytes = request.body ? await readBytes(request, MAX_REQUEST_BYTES) : new Uint8Array();
   if (bytes.byteLength > 0) {
     let input: unknown;
@@ -555,8 +570,45 @@ async function permanentlyDeleteNote(id: string, env: Env): Promise<Response> {
   return json({ ok: true });
 }
 
+async function emptyTrash(env: Env): Promise<Response> {
+  // 操作開始時点のゴミ箱を対象にし、後から移されたメモは次回に残す。
+  const cutoff = new Date().toISOString();
+  let afterId = "";
+  let deleted = 0;
+  let failed = 0;
+  while (true) {
+    const result = await env.DB.prepare(
+      "SELECT id FROM notes WHERE deleted_at IS NOT NULL AND deleted_at <= ? AND id > ? ORDER BY id LIMIT 99",
+    ).bind(cutoff, afterId).all<{ id: string }>();
+    const rows = result.results ?? [];
+    if (!rows.length) break;
+    const ids = rows.map((row) => row.id);
+    afterId = ids[ids.length - 1];
+    const placeholders = ids.map(() => "?").join(",");
+    try {
+      const attachments = await env.DB.prepare(
+        `SELECT r2_key FROM attachments WHERE note_id IN (${placeholders})`,
+      ).bind(...ids).all<{ r2_key: string }>();
+      const keys = (attachments.results ?? []).map((row) => row.r2_key);
+      for (let index = 0; index < keys.length; index += 1000) {
+        await env.IMAGES.delete(keys.slice(index, index + 1000));
+      }
+      // R2の削除が成功したバッチだけ、関連データとともに完全削除する。
+      const removed = await env.DB.prepare(
+        `DELETE FROM notes WHERE id IN (${placeholders}) AND deleted_at IS NOT NULL AND deleted_at <= ? RETURNING id`,
+      ).bind(...ids, cutoff).all<{ id: string }>();
+      deleted += (removed.results ?? []).length;
+    } catch (error) {
+      failed += rows.length;
+      console.error("trash_empty_batch_failed", error);
+    }
+    if (rows.length < 99) break;
+  }
+  return json({ deleted, failed });
+}
+
 async function purgeOldTrash(env: Env): Promise<void> {
-  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   let afterId = "";
   while (true) {
     const result = await env.DB.prepare(
@@ -925,6 +977,14 @@ export default {
       if (request.method !== "GET") {
         const origin = request.headers.get("Origin");
         if (origin && origin !== url.origin) return json({ error: "この操作は許可されていません。" }, 403);
+      }
+
+      if (url.pathname === "/api/counts" && request.method === "GET") {
+        return await sidebarCounts(env);
+      }
+
+      if (url.pathname === "/api/trash" && request.method === "DELETE") {
+        return await emptyTrash(env);
       }
 
       if (url.pathname === "/api/notes/check" && request.method === "GET") {
