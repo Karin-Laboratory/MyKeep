@@ -6,16 +6,20 @@
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": [
+      "/api/*"
+    ]
   },
   "triggers": {
-    "crons": ["0 18 * * *"]
+    "crons": [
+      "0 18 * * *"
+    ]
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "mykeep",
-      "database_id": "60f91b7b-a15e-4455-9f2f-4a22ac32a85b"
+      "database_id": "53ee9329-4b30-47b5-8c97-c0cc9c374613"
     }
   ],
   "r2_buckets": [
@@ -23,5 +27,6 @@
       "binding": "IMAGES",
       "bucket_name": "mykeep-images"
     }
-  ]
+  ],
+  "account_id": "0c1723108de2b45ee7c8e4b45014a447"
 }
