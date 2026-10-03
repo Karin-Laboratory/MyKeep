@@ -164,10 +164,11 @@ h2 { margin: 0; font-size: 1.15rem; }
 .upload-label { display: grid; gap: 6px; font-size: .9rem; font-weight: 600; }
 .upload-label input { max-width: 100%; font-weight: 400; font-size: .8rem; }
 .image-group-label { color: #666; }
-.editor-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 8px; }
+.editor-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; }
 .editor-image { min-width: 0; display: grid; gap: 5px; }
 .card-image-choice { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; font-size: .85rem; }
 .card-image-choice label, .card-image-radio { display: flex; align-items: center; gap: 6px; min-height: 36px; cursor: pointer; font-size: .8rem; }
+.card-image-radio { white-space: nowrap; }
 .card-image-choice input, .card-image-radio input { width: 18px; height: 18px; margin: 0; flex-shrink: 0; }
 .link-preview-photo { display: block; position: relative; }
 .editor-image img { width: 100%; height: 76px; object-fit: cover; border-radius: 7px; background: #f1f1ed; }
@@ -227,6 +228,7 @@ h2 { margin: 0; font-size: 1.15rem; }
   .bulk-toolbar button { padding: 7px 9px; font-size: .85rem; }
   .bulk-selection-controls, .bulk-operation-controls { gap: 6px; }
   .editor { padding: 18px; }
+  .editor-images { grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); }
   .utility-modal { padding: 18px; }
 }
 @media (max-width: 300px) {

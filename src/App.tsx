@@ -1798,7 +1798,7 @@ export default function App() {
                         <button type="button" onClick={() => removeImage(attachment)} disabled={working} aria-label={`${attachment.filename}を削除`}>削除</button>
                         {IMAGE_TYPES.includes(attachment.mime_type) && <label className="card-image-radio">
                           <input type="radio" name="card-image" value={`attachment:${attachment.id}`} checked={draft.card_image === `attachment:${attachment.id}`} disabled={working}
-                            aria-label={`${attachment.filename}をカードに表示`} onChange={() => setDraft({ ...draft, card_image: `attachment:${attachment.id}` })} />カードに表示
+                            aria-label={`${attachment.filename}をカードに表示`} onChange={() => setDraft({ ...draft, card_image: `attachment:${attachment.id}` })} />カード表示
                         </label>}
                       </div>
                     ))}
@@ -1806,7 +1806,7 @@ export default function App() {
                       <button type="button" className="image-thumbnail" aria-label="サムネイルを拡大表示" onClick={() => setViewerImageId("link-preview")}><img src={editorPreviewImage} alt="リンクサムネイル" loading="lazy" referrerPolicy="no-referrer" /></button>
                       <small className="image-group-label">サムネイル</small>
                       <label className="card-image-radio"><input type="radio" name="card-image" value="preview" checked={draft.card_image === "preview"} disabled={working}
-                        aria-label="サムネイルをカードに表示" onChange={() => setDraft({ ...draft, card_image: "preview" })} />カードに表示</label>
+                        aria-label="サムネイルをカードに表示" onChange={() => setDraft({ ...draft, card_image: "preview" })} />カード表示</label>
                     </div>}
                 </div>
               </>}
