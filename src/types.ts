@@ -33,6 +33,7 @@ export interface Note extends NotePreview {
   body: string;
   url: string;
   pinned: boolean;
+  pin_level: number;
   archived: boolean;
   color: NoteColor;
   deleted_at: string | null;
@@ -44,6 +45,7 @@ export interface Note extends NotePreview {
 }
 
 export type NoteInput = Pick<Note, "title" | "body" | "url" | "pinned" | "archived" | "color"> & Partial<NotePreview> & {
+  pin_level?: number;
   card_image?: CardImageChoice;
   checklist?: ChecklistInput[];
   labels?: string[];
