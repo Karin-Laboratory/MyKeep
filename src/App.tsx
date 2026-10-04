@@ -284,6 +284,29 @@ function LabelCreator({ disabled, onCreate }: { disabled: boolean; onCreate: (na
 }
 
 export default function App() {
+  const [pinHeadings, setPinHeadings] = useState(["1段目", "2段目", "3段目"]);
+  const [editingPinHeading, setEditingPinHeading] = useState<number | null>(null);
+  const [pinHeadingDraft, setPinHeadingDraft] = useState("");
+  const [pinHeadingSaving, setPinHeadingSaving] = useState(false);
+  const [pinHeadingError, setPinHeadingError] = useState("");
+  const [pinHeadingsLoaded, setPinHeadingsLoaded] = useState(false);
+  useEffect(() => {
+    api<{ headings: string[] }>("/api/pin-headings").then(({ headings }) => {
+      setPinHeadings(headings); setPinHeadingsLoaded(true);
+    }).catch((error) => setPinHeadingError(error.message));
+  }, []);
+  async function savePinHeading(event: FormEvent) {
+    event.preventDefault();
+    if (editingPinHeading === null) return;
+    setPinHeadingSaving(true); setPinHeadingError("");
+    try {
+      const { headings } = await api<{ headings: string[] }>("/api/pin-headings", {
+        method: "PATCH", body: JSON.stringify({ level: editingPinHeading, title: pinHeadingDraft }),
+      });
+      setPinHeadings(headings); setEditingPinHeading(null);
+    } catch (error) { setPinHeadingError(error instanceof Error ? error.message : "保存に失敗しました。"); }
+    finally { setPinHeadingSaving(false); }
+  }
   const [view, setView] = useState<View>("active");
   const [search, setSearch] = useState("");
   const [labelFilter, setLabelFilter] = useState("");
@@ -1595,8 +1618,23 @@ export default function App() {
         <section className="grid" aria-label="ゴミ箱一覧">{notes.map(renderNoteCard)}</section>
       ) : <>
         {view !== "unpinned" && pinRows.map(({ level, notes: rowNotes }) => (view === "active" || rowNotes.length > 0) &&
-          <section className="pin-row" data-pin-level={level} key={level} aria-label={`${level}段目のピン留めメモ`}>
-            <h2>📌 {level}段目</h2>
+          <section className="pin-row" data-pin-level={level} key={level} aria-label={`${pinHeadings[level - 1]}のピン留めメモ`}>
+            <div className="pin-row-heading">
+              {editingPinHeading === level ? <form onSubmit={savePinHeading}>
+                <input autoFocus aria-label={`${level}段目の見出し`} maxLength={60} required
+                  value={pinHeadingDraft} disabled={pinHeadingSaving}
+                  onChange={(event) => setPinHeadingDraft(event.target.value)} />
+                <button type="submit" disabled={pinHeadingSaving}>{pinHeadingSaving ? "保存中…" : "保存"}</button>
+                <button type="button" disabled={pinHeadingSaving} onClick={() => { setEditingPinHeading(null); setPinHeadingError(""); }}>キャンセル</button>
+              </form> : <>
+                <h2>📌 {pinHeadings[level - 1]}</h2>
+                <button type="button" disabled={!pinHeadingsLoaded || pinHeadingSaving}
+                  aria-label={`${level}段目の見出しを編集`} onClick={() => {
+                    setEditingPinHeading(level); setPinHeadingDraft(pinHeadings[level - 1]); setPinHeadingError("");
+                  }}>編集</button>
+              </>}
+            </div>
+            {pinHeadingError && (editingPinHeading === level || !pinHeadingsLoaded) && <p role="alert">{pinHeadingError}</p>}
             {rowNotes.length > 0 ? <div className="grid">{rowNotes.map(renderNoteCard)}</div>
               : <p className="pin-row-empty">この段にピン留めしたメモはありません。</p>}
           </section>)}
