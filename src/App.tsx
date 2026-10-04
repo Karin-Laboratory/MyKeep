@@ -10,7 +10,7 @@ import type { LinkPreview } from "./linkPreview";
 import { NOTE_COLORS } from "./types";
 import type { Attachment, ChecklistInput, Note, NoteColor, NoteInput } from "./types";
 
-type View = "active" | "unpinned" | "imageless" | "archived" | "trash";
+type View = "active" | "unpinned" | "images" | "imageless" | "archived" | "trash";
 type NoteList = { notes: Note[]; hasMore: boolean };
 type NoteCheck = { notes: Pick<Note, "id" | "updated_at">[] };
 type SidebarCounts = { views: Record<View, number>; labels: Record<string, number> };
@@ -74,6 +74,15 @@ function restoreListAnchor(anchor: ScrollAnchor) {
   const card = [...document.querySelectorAll<HTMLElement>(".card[data-note-id]")]
     .find((element) => element.dataset.noteId === anchor.id);
   window.scrollTo({ top: card ? window.scrollY + card.getBoundingClientRect().top - anchor.top : anchor.scrollY, behavior: "instant" });
+}
+
+function ImageFilterIcon({ empty }: { empty: boolean }) {
+  return <svg className="nav-image-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <circle cx="8" cy="8" r="1.5" />
+    <path d="m3 17 6-6 4 4 3-3 5 5" />
+    {empty && <path d="m2 2 20 20" />}
+  </svg>;
 }
 
 function SettingsIcon() {
@@ -209,7 +218,6 @@ function resolveCardImage(note: Note, preview: LinkPreview | null): CardImage | 
 function notePreview(note: Note, showTitle: boolean, showBody: boolean, showArchive = false, cardImage: CardImage | null = null) {
   const imageAttachments = note.attachments.filter((item) => IMAGE_TYPES.includes(item.mime_type));
   return <>
-    {note.pinned && <span className="pin-label">📌 {note.pin_level || 1}段目</span>}
     {showArchive && note.archived && <span className="pin-label">📦 アーカイブ</span>}
     {showTitle && note.title && <strong>{note.title}</strong>}
     {showBody && note.body && <span className="body-preview">{note.body}</span>}
@@ -1592,12 +1600,12 @@ export default function App() {
           <div className="sidebar-title">MyKeep</div>
           <nav className="sidebar-nav" aria-label="メモの表示">
             {([
-              ["active", "💡", "メモ"], ["unpinned", "○", "ピンなし"], ["imageless", "▧", "画像なし"],
+              ["active", "💡", "メモ"], ["unpinned", "○", "ピンなし"], ["images", "▧", "画像あり"], ["imageless", "▧", "画像なし"],
               ["archived", "📦", "アーカイブ"], ["trash", "🗑", "ゴミ箱"],
             ] as const).map(([itemView, icon, name]) => <button type="button" key={itemView}
               className={view === itemView && !labelFilter ? "selected" : ""}
               aria-current={view === itemView && !labelFilter ? "page" : undefined} onClick={() => selectView(itemView)}>
-              <span aria-hidden="true">{icon}</span><span className="nav-name">{name}</span>
+              <span aria-hidden="true">{itemView === "images" || itemView === "imageless" ? <ImageFilterIcon empty={itemView === "imageless"} /> : icon}</span><span className="nav-name">{name}</span>
               <span className="nav-count">{counts ? countFormat.format(counts.views[itemView]) : "—"}</span>
             </button>)}
           </nav>
@@ -1620,7 +1628,7 @@ export default function App() {
       </div>}
       {bulkResult && <p className={bulkResult.failed ? "error" : "bulk-result"} role={bulkResult.failed ? "alert" : "status"}>{bulkResult.message}</p>}
       {error && !draft && <p className="error" role="alert">{error}</p>}
-      {!loading && notes.length === 0 && <p className="empty">{search.trim() || labelFilter ? "該当するメモはありません。" : view === "active" ? "メモはまだありません。" : view === "unpinned" ? "ピンなしのメモはありません。" : view === "imageless" ? "画像なしのメモはありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}
+      {!loading && notes.length === 0 && <p className="empty">{search.trim() || labelFilter ? "該当するメモはありません。" : view === "active" ? "メモはまだありません。" : view === "unpinned" ? "ピンなしのメモはありません。" : view === "images" ? "画像ありのメモはありません。" : view === "imageless" ? "画像なしのメモはありません。" : view === "archived" ? "アーカイブはありません。" : "ゴミ箱は空です。"}</p>}
 
       {view === "trash" ? (
         <section className="grid" aria-label="ゴミ箱一覧">{notes.map(renderNoteCard)}</section>
@@ -1636,13 +1644,12 @@ export default function App() {
                   onChange={(event) => setPinHeadingDraft(event.target.value)} />
                 <button type="submit" disabled={pinHeadingSaving}>{pinHeadingSaving ? "保存中…" : "保存"}</button>
                 <button type="button" disabled={pinHeadingSaving} onClick={() => { setEditingPinHeading(null); setPinHeadingError(""); }}>キャンセル</button>
-              </form> : <>
-                <h2>📌 {pinHeadings[level - 1]}</h2>
-                <button type="button" disabled={!pinHeadingsLoaded || pinHeadingSaving}
-                  aria-label={`${level}段目の見出しを編集`} onClick={() => {
+              </form> : <h2>
+                <button type="button" className="pin-heading-edit" disabled={!pinHeadingsLoaded || pinHeadingSaving}
+                  title="クリックして見出しを編集" aria-label={`${pinHeadings[level - 1]}の見出しを編集`} onClick={() => {
                     setEditingPinHeading(level); setPinHeadingDraft(pinHeadings[level - 1]); setPinHeadingError("");
-                  }}>編集</button>
-              </>}
+                  }}>📌 {pinHeadings[level - 1]}</button>
+              </h2>}
             </div>
             {pinHeadingError && (editingPinHeading === level || !pinHeadingsLoaded) && <p role="alert">{pinHeadingError}</p>}
             {rowNotes.length > 0 ? <div className="grid">{rowNotes.map(renderNoteCard)}</div>
@@ -1650,7 +1657,7 @@ export default function App() {
           </section>)}
         {(otherNotes.length > 0 || view === "active") && <section className={`grid unpinned-drop-zone${dropLevel === 0 ? " drag-over-row" : ""}`}
           onDragOver={(event) => { if (draggingNoteRef.current && !working) { event.preventDefault(); setDropNoteId(null); setDropLevel(0); } }}
-          onDrop={(event) => { if (draggingNoteRef.current) { event.preventDefault(); void dropCard(0, null); } }} aria-label={view === "active" ? "メモ一覧" : view === "unpinned" ? "ピンなしメモ一覧" : view === "imageless" ? "画像なしメモ一覧" : "アーカイブ一覧"}>{otherNotes.length ? otherNotes.map(renderNoteCard) : <p className="pin-row-empty">ピンなしのメモをここに移動できます。</p>}</section>}
+          onDrop={(event) => { if (draggingNoteRef.current) { event.preventDefault(); void dropCard(0, null); } }} aria-label={view === "active" ? "メモ一覧" : view === "unpinned" ? "ピンなしメモ一覧" : view === "images" ? "画像ありメモ一覧" : view === "imageless" ? "画像なしメモ一覧" : "アーカイブ一覧"}>{otherNotes.length ? otherNotes.map(renderNoteCard) : <p className="pin-row-empty">ピンなしのメモをここに移動できます。</p>}</section>}
       </>}
 
       {(loading || loadingMore) && <p className="status">読み込み中…</p>}
