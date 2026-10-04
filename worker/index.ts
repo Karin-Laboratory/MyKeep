@@ -9,6 +9,7 @@ interface NoteRow extends NotePreview {
   body: string;
   url: string;
   pinned: number;
+  pin_level: number;
   archived: number;
   color: NoteColor;
   deleted_at: string | null;
@@ -44,7 +45,7 @@ interface LabelRow {
   name: string;
 }
 
-const SELECT_NOTE = "SELECT id, title, body, url, pinned, archived, color, deleted_at, created_at, updated_at, preview_title, preview_description, preview_image, preview_hostname, card_image FROM notes";
+const SELECT_NOTE = "SELECT id, title, body, url, pinned, pin_level, archived, color, deleted_at, created_at, updated_at, preview_title, preview_description, preview_image, preview_hostname, card_image FROM notes";
 const PAGE_SIZE = 50;
 const MAX_SEARCH_LENGTH = 200;
 const MAX_CHECKLIST_ITEMS = 500;
@@ -66,7 +67,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 function toNote(row: NoteRow, attachments: Attachment[] = [], checklist: ChecklistItem[] = [], labels: string[] = []): Note {
-  return { ...row, pinned: row.pinned === 1, archived: row.archived === 1, attachments, checklist, labels };
+  return { ...row, pinned: row.pinned === 1, pin_level: row.pinned ? row.pin_level || 1 : 0, archived: row.archived === 1, attachments, checklist, labels };
 }
 
 function labelKey(name: string): string {
@@ -156,7 +157,15 @@ function parseInput(value: unknown, current?: NoteRow, allowEmpty = false): Note
   const title = input.title ?? current?.title ?? "";
   const body = input.body ?? current?.body ?? "";
   const url = input.url ?? current?.url ?? "";
-  const pinned = input.pinned ?? (current ? current.pinned === 1 : false);
+  if (input.pinned !== undefined && typeof input.pinned !== "boolean") return null;
+  if (input.pin_level !== undefined && typeof input.pin_level !== "number") return null;
+  let pinLevel = input.pin_level ?? (current?.pinned ? current.pin_level || 1 : 0);
+  if (input.pin_level === undefined && input.pinned !== undefined) {
+    pinLevel = input.pinned ? (current?.pinned ? current.pin_level || 1 : 1) : 0;
+  }
+  if (!Number.isInteger(pinLevel) || Number(pinLevel) < 0 || Number(pinLevel) > 3) return null;
+  if (input.pin_level !== undefined && input.pinned !== undefined && input.pinned !== (Number(pinLevel) > 0)) return null;
+  const pinned = Number(pinLevel) > 0;
   const archived = input.archived ?? (current ? current.archived === 1 : false);
   const color = input.color ?? current?.color ?? "default";
   let cardImage = input.card_image === undefined ? current?.card_image ?? "auto" : input.card_image;
@@ -227,7 +236,7 @@ function parseInput(value: unknown, current?: NoteRow, allowEmpty = false): Note
     if (current?.card_image === "preview" && (current.url !== url || input.preview_image === "")) cardImage = "auto";
     else return null;
   }
-  return { title, body, url, pinned, archived, color: color as NoteColor, card_image: cardImage as CardImageChoice, checklist, labels, ...preview };
+  return { title, body, url, pinned, pin_level: Number(pinLevel), archived, color: color as NoteColor, card_image: cardImage as CardImageChoice, checklist, labels, ...preview };
 }
 
 async function validCardImage(input: NoteInput, env: Env, noteId?: string): Promise<boolean> {
@@ -297,7 +306,7 @@ function noteListFilter(params: URLSearchParams) {
     bindings.push(labelKey(label));
   }
   const order = view === "trash" ? "deleted_at DESC, id DESC"
-    : view === "unpinned" ? "updated_at DESC, id DESC" : "pinned DESC, updated_at DESC, id DESC";
+    : view === "unpinned" ? "updated_at DESC, id DESC" : "pinned DESC, CASE WHEN pin_level = 0 THEN 1 ELSE pin_level END ASC, updated_at DESC, id DESC";
   return { where: conditions.join(" AND "), bindings, order };
 }
 
@@ -483,8 +492,8 @@ async function insertNote(input: NoteInput, env: Env, timestamps?: { created_at:
   const createdAt = timestamps?.created_at ?? now;
   const updatedAt = timestamps?.updated_at ?? now;
   const statements = [env.DB.prepare(
-    "INSERT INTO notes (id, title, body, url, pinned, archived, color, deleted_at, created_at, updated_at, preview_title, preview_description, preview_image, preview_hostname, card_image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  ).bind(id, input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, deletedAt, createdAt, updatedAt,
+    "INSERT INTO notes (id, title, body, url, pinned, pin_level, archived, color, deleted_at, created_at, updated_at, preview_title, preview_description, preview_image, preview_hostname, card_image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).bind(id, input.title, input.body, input.url, Number(input.pinned), input.pin_level ?? (input.pinned ? 1 : 0), Number(input.archived), input.color, deletedAt, createdAt, updatedAt,
     input.preview_title ?? "", input.preview_description ?? "", input.preview_image ?? "", input.preview_hostname ?? "", input.card_image ?? "auto"),
   ...relationStatements(id, input, env, false, existingLabelsOnly)];
   await env.DB.batch(statements);
@@ -530,8 +539,8 @@ async function updateNote(id: string, request: Request, env: Env): Promise<Respo
 
   const now = new Date().toISOString();
   await env.DB.batch([env.DB.prepare(
-    "UPDATE notes SET title = ?, body = ?, url = ?, pinned = ?, archived = ?, color = ?, updated_at = ?, preview_title = ?, preview_description = ?, preview_image = ?, preview_hostname = ?, card_image = ? WHERE id = ? AND deleted_at IS NULL",
-  ).bind(input.title, input.body, input.url, Number(input.pinned), Number(input.archived), input.color, now,
+    "UPDATE notes SET title = ?, body = ?, url = ?, pinned = ?, pin_level = ?, archived = ?, color = ?, updated_at = ?, preview_title = ?, preview_description = ?, preview_image = ?, preview_hostname = ?, card_image = ? WHERE id = ? AND deleted_at IS NULL",
+  ).bind(input.title, input.body, input.url, Number(input.pinned), input.pin_level ?? (input.pinned ? 1 : 0), Number(input.archived), input.color, now,
     input.preview_title, input.preview_description, input.preview_image, input.preview_hostname, input.card_image, id),
   ...relationStatements(id, input, env, true)]);
   const row = await env.DB.prepare(`${SELECT_NOTE} WHERE id = ?`).bind(id).first<NoteRow>();
