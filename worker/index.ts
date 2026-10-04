@@ -10,6 +10,7 @@ interface NoteRow extends NotePreview {
   url: string;
   pinned: number;
   pin_level: number;
+  sort_order: number;
   archived: number;
   color: NoteColor;
   deleted_at: string | null;
@@ -45,7 +46,7 @@ interface LabelRow {
   name: string;
 }
 
-const SELECT_NOTE = "SELECT id, title, body, url, pinned, pin_level, archived, color, deleted_at, created_at, updated_at, preview_title, preview_description, preview_image, preview_hostname, card_image FROM notes";
+const SELECT_NOTE = "SELECT id, title, body, url, pinned, pin_level, sort_order, archived, color, deleted_at, created_at, updated_at, preview_title, preview_description, preview_image, preview_hostname, card_image FROM notes";
 const PAGE_SIZE = 50;
 const MAX_SEARCH_LENGTH = 200;
 const MAX_CHECKLIST_ITEMS = 500;
@@ -306,7 +307,7 @@ function noteListFilter(params: URLSearchParams) {
     bindings.push(labelKey(label));
   }
   const order = view === "trash" ? "deleted_at DESC, id DESC"
-    : view === "unpinned" ? "updated_at DESC, id DESC" : "pinned DESC, CASE WHEN pin_level = 0 THEN 1 ELSE pin_level END ASC, updated_at DESC, id DESC";
+    : view === "unpinned" ? "sort_order ASC, updated_at DESC, id DESC" : "pinned DESC, CASE WHEN pin_level = 0 THEN 1 ELSE pin_level END ASC, sort_order ASC, updated_at DESC, id DESC";
   return { where: conditions.join(" AND "), bindings, order };
 }
 
@@ -990,6 +991,33 @@ async function deleteAttachment(noteId: string, attachmentId: string, env: Env):
   return json({ ok: true });
 }
 
+async function moveNote(request: Request, env: Env): Promise<Response> {
+  const input = await readInput(request) as { id?: unknown; level?: unknown; before_id?: unknown } | null;
+  if (!input || typeof input.id !== "string" || !Number.isInteger(input.level) || Number(input.level) < 0 || Number(input.level) > 3
+    || (input.before_id !== null && typeof input.before_id !== "string")) return json({ error: "移動先が正しくありません。" }, 400);
+  const source = await env.DB.prepare("SELECT id, archived FROM notes WHERE id = ? AND deleted_at IS NULL").bind(input.id).first<{id: string; archived: number}>();
+  if (!source) return json({ error: "メモが見つかりません。" }, 404);
+  const level = Number(input.level);
+  const { results } = await env.DB.prepare("SELECT id, sort_order FROM notes WHERE deleted_at IS NULL AND archived = ? AND (CASE WHEN pinned = 0 THEN 0 WHEN pin_level = 0 THEN 1 ELSE pin_level END) = ? ORDER BY sort_order ASC, updated_at DESC, id DESC")
+    .bind(source.archived, level).all<{id: string; sort_order: number}>();
+  if (input.before_id === input.id) return json({ ok: true });
+  const rows = results.filter(row => row.id !== input.id);
+  const index = input.before_id === null ? rows.length : rows.findIndex(row => row.id === input.before_id);
+  if (index < 0) return json({ error: "移動先が変わりました。再読み込みしてください。" }, 409);
+  const previous = index > 0 ? rows[index - 1].sort_order : null;
+  const next = index < rows.length ? rows[index].sort_order : null;
+  let position = previous === null ? (next === null ? 1024 : next - 1024) : next === null ? previous + 1024 : previous + (next - previous) / 2;
+  if (!Number.isFinite(position) || (previous !== null && next !== null && (position <= previous || position >= next))) {
+    const statements = rows.map((row, i) => env.DB.prepare("UPDATE notes SET sort_order = ? WHERE id = ?").bind((i + 1) * 1024, row.id));
+    // Rebalance only if floating point gaps are exhausted (or legacy rows share a rank).
+    for (let i = 0; i < statements.length; i += 50) await env.DB.batch(statements.slice(i, i + 50));
+    position = (index + 0.5) * 1024;
+  }
+  await env.DB.prepare("UPDATE notes SET pinned = ?, pin_level = ?, sort_order = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
+    .bind(Number(level > 0), level, position, new Date().toISOString(), source.id).run();
+  return json({ ok: true });
+}
+
 async function pinHeadings(request: Request, env: Env): Promise<Response> {
   if (request.method === "PATCH") {
     const input = await readInput(request) as { level?: unknown; title?: unknown } | null;
@@ -1027,6 +1055,8 @@ export default {
         const origin = request.headers.get("Origin");
         if (origin && origin !== url.origin) return json({ error: "この操作は許可されていません。" }, 403);
       }
+
+      if (url.pathname === "/api/notes/move" && request.method === "POST") return await moveNote(request, env);
 
       if (url.pathname === "/api/pin-headings" && (request.method === "GET" || request.method === "PATCH")) {
         return await pinHeadings(request, env);
