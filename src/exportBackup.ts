@@ -138,7 +138,7 @@ export async function createBackup(
       preview_title: note.preview_title, preview_description: note.preview_description,
       preview_image: note.preview_image, preview_hostname: note.preview_hostname,
       card_image: note.card_image ?? "auto",
-      pinned: note.pinned, archived: note.archived, trashed: note.deleted_at !== null,
+      pinned: note.pinned, pin_level: note.pin_level, archived: note.archived, trashed: note.deleted_at !== null,
       deleted_at: note.deleted_at, created_at: note.created_at, updated_at: note.updated_at,
       checklist: note.checklist.map((item) => ({ id: item.id, text: item.text, checked: item.checked, order: item.position })),
       labels: note.labels, attachments, markdown_path: markdownPath,
