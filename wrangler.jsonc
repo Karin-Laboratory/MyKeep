@@ -28,5 +28,13 @@
       "bucket_name": "mykeep-images"
     }
   ],
-  "account_id": "0c1723108de2b45ee7c8e4b45014a447"
+  "account_id": "0c1723108de2b45ee7c8e4b45014a447",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "mykeep.karin-lab.com",
+      "custom_domain": true
+    }
+  ]
 }
