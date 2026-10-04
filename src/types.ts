@@ -34,6 +34,7 @@ export interface Note extends NotePreview {
   url: string;
   pinned: boolean;
   pin_level: number;
+  sort_order: number;
   archived: boolean;
   color: NoteColor;
   deleted_at: string | null;
