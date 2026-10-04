@@ -25,7 +25,7 @@ type CreatedLabel = { label: string; created: boolean };
 type ScrollAnchor = { id: string | null; top: number; scrollY: number };
 type ViewerImage = Pick<Attachment, "id" | "url" | "filename"> & { kind: "attachment" | "preview" };
 
-const emptyNote: NoteDraft = { title: "", body: "", url: "", pinned: false, archived: false, color: "default", card_image: "auto", checklist: [] };
+const emptyNote: NoteDraft = { title: "", body: "", url: "", pinned: false, pin_level: 0, archived: false, color: "default", card_image: "auto", checklist: [] };
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
 const countFormat = new Intl.NumberFormat("ja-JP");
@@ -209,7 +209,7 @@ function resolveCardImage(note: Note, preview: LinkPreview | null): CardImage | 
 function notePreview(note: Note, showTitle: boolean, showBody: boolean, showArchive = false, cardImage: CardImage | null = null) {
   const imageAttachments = note.attachments.filter((item) => IMAGE_TYPES.includes(item.mime_type));
   return <>
-    {note.pinned && <span className="pin-label">📌 ピン留め</span>}
+    {note.pinned && <span className="pin-label">📌 {note.pin_level || 1}段目</span>}
     {showArchive && note.archived && <span className="pin-label">📦 アーカイブ</span>}
     {showTitle && note.title && <strong>{note.title}</strong>}
     {showBody && note.body && <span className="body-preview">{note.body}</span>}
@@ -503,7 +503,7 @@ export default function App() {
         }
         if (!controller.signal.aborted) {
           const orderChanged = notesRef.current.some((note, index) =>
-            note.id !== collected[index]?.id || note.pinned !== collected[index]?.pinned);
+            note.id !== collected[index]?.id || note.pinned !== collected[index]?.pinned || note.pin_level !== collected[index]?.pin_level);
           if (!changedFilter && orderChanged) {
             if (!scrollAnchorRef.current) scrollAnchorRef.current = captureListAnchor();
           } else {
@@ -746,7 +746,7 @@ export default function App() {
     setCreatingLabel(false);
     setNewLabelName("");
     setDraft(note
-      ? { title: note.title, body: note.body, url: note.url, pinned: note.pinned, archived: note.archived, color: note.color,
+      ? { title: note.title, body: note.body, url: note.url, pinned: note.pinned, pin_level: note.pin_level ?? (note.pinned ? 1 : 0), archived: note.archived, color: note.color,
         card_image: note.card_image ?? "auto",
         checklist: note.checklist.map(({ text, checked }) => ({ text, checked })) }
       : { ...emptyNote, archived: view === "archived" });
@@ -1005,6 +1005,25 @@ export default function App() {
     } finally {
       setWorking(false);
     }
+  }
+
+  async function updatePinLevel(note: Note, level: number) {
+    if (working) return;
+    setWorking(true);
+    setError("");
+    setUndoAction(null);
+    try {
+      await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify({ pin_level: level }) });
+      reloadList();
+      setUndoAction({
+        message: level ? `${level}段目にピン留めしました。` : "ピンを解除しました。",
+        undo: async () => {
+          await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify({ pin_level: note.pinned ? note.pin_level || 1 : 0 }) });
+        },
+      });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "更新に失敗しました。");
+    } finally { setWorking(false); }
   }
 
   async function updateFlag(note: Note, field: "pinned" | "archived") {
@@ -1452,7 +1471,7 @@ export default function App() {
   const viewerImages: ViewerImage[] = editorAttachments.filter((attachment) => IMAGE_TYPES.includes(attachment.mime_type))
     .map(({ id, url, filename }) => ({ id, url, filename, kind: "attachment" }));
   if (editorPreviewImage) viewerImages.push({ id: "link-preview", url: editorPreviewImage, filename: "サムネイル", kind: "preview" });
-  const pinnedNotes = notes.filter((note) => note.pinned);
+  const pinRows = [1, 2, 3].map((level) => ({ level, notes: notes.filter((note) => note.pinned && (note.pin_level || 1) === level) }));
   const otherNotes = notes.filter((note) => !note.pinned);
   const selectedActiveCount = notes.filter((note) => selectedNoteIds.has(note.id) && !note.archived).length;
   const selectedArchivedCount = notes.filter((note) => selectedNoteIds.has(note.id) && note.archived).length;
@@ -1496,7 +1515,11 @@ export default function App() {
             <button disabled={working} onClick={() => restore(note)}>復元</button>
             <button className="danger" disabled={working} onClick={() => permanentlyRemove(note)}>完全削除</button>
           </> : <>
-            <button disabled={working} onClick={() => updateFlag(note, "pinned")}>{note.pinned ? "ピン解除" : "ピン留め"}</button>
+            <select className="pin-select" aria-label={`${note.title || "無題のメモ"}のピン留め先`} disabled={working}
+              value={note.pinned ? note.pin_level || 1 : 0} onChange={(event) => updatePinLevel(note, Number(event.target.value))}>
+              <option value={0}>ピンなし</option><option value={1}>1段目・ピンク</option>
+              <option value={2}>2段目・イエロー</option><option value={3}>3段目・ブルー</option>
+            </select>
             <button disabled={working} onClick={() => updateFlag(note, "archived")}>{note.archived ? "戻す" : "アーカイブ"}</button>
             {note.archived && <button className="trash-action" disabled={working} onClick={() => moveCardToTrash(note)}>ゴミ箱</button>}
           </>}
@@ -1571,8 +1594,12 @@ export default function App() {
       {view === "trash" ? (
         <section className="grid" aria-label="ゴミ箱一覧">{notes.map(renderNoteCard)}</section>
       ) : <>
-        {pinnedNotes.length > 0 && <section className="grid" aria-label="ピン留めメモ">{pinnedNotes.map(renderNoteCard)}</section>}
-        {pinnedNotes.length > 0 && otherNotes.length > 0 && <div className="note-section-separator" aria-hidden="true" />}
+        {view !== "unpinned" && pinRows.map(({ level, notes: rowNotes }) => (view === "active" || rowNotes.length > 0) &&
+          <section className="pin-row" data-pin-level={level} key={level} aria-label={`${level}段目のピン留めメモ`}>
+            <h2>📌 {level}段目</h2>
+            {rowNotes.length > 0 ? <div className="grid">{rowNotes.map(renderNoteCard)}</div>
+              : <p className="pin-row-empty">この段にピン留めしたメモはありません。</p>}
+          </section>)}
         {otherNotes.length > 0 && <section className="grid" aria-label={view === "active" ? "メモ一覧" : view === "unpinned" ? "ピンなしメモ一覧" : view === "imageless" ? "画像なしメモ一覧" : "アーカイブ一覧"}>{otherNotes.map(renderNoteCard)}</section>}
       </>}
 
@@ -1767,7 +1794,11 @@ export default function App() {
               <label className="editor-color">色<select aria-label="メモの色" value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value as NoteColor })}>
               {NOTE_COLORS.map((color) => <option value={color} key={color}>{COLOR_LABELS[color]}</option>)}
             </select></label>
-              <label><input type="checkbox" checked={draft.pinned} onChange={(event) => setDraft({ ...draft, pinned: event.target.checked })} /> ピン留め</label>
+              <label>ピン留め先 <select value={draft.pinned ? draft.pin_level || 1 : 0}
+                onChange={(event) => { const level = Number(event.target.value); setDraft({ ...draft, pinned: level > 0, pin_level: level }); }}>
+                <option value={0}>ピンなし</option><option value={1}>1段目・ピンク</option>
+                <option value={2}>2段目・イエロー</option><option value={3}>3段目・ブルー</option>
+              </select></label>
               <label><input type="checkbox" checked={draft.archived} onChange={(event) => setDraft({ ...draft, archived: event.target.checked })} /> アーカイブ</label>
             </div>
             <section className="image-section" aria-label="添付ファイル">
