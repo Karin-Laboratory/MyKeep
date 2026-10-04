@@ -11,6 +11,7 @@ const legacy='11111111-1111-4111-8111-111111111111';
 sqlite.prepare("INSERT INTO notes(id,title,pinned,created_at,updated_at) VALUES(?,?,1,?,?)").run(legacy,'legacy pin','2026-01-01','2026-01-01');
 sqlite.exec(readFileSync('migrations/0007_pin_levels.sql','utf8'));
 sqlite.exec(readFileSync('migrations/0008_pin_headings.sql','utf8'));
+sqlite.exec(readFileSync('migrations/0009_card_order.sql','utf8'));
 class Statement {
  constructor(sql,args=[]){this.sql=sql;this.args=args;}
  bind(...args){return new Statement(this.sql,args);}
@@ -42,3 +43,17 @@ for(const level of [1,2,3]){r=await call('/api/pin-headings','PATCH',{level,titl
 r=await call('/api/pin-headings');assert.deepEqual(r.data.headings,['見出し1','見出し2','見出し3']);
 for(const input of [{level:0,title:'bad'},{level:4,title:'bad'},{level:1,title:' '},{level:2,title:'x'.repeat(61)},null]) {r=await call('/api/pin-headings','PATCH',input);assert.equal(r.status,400);}
 console.log('PASS: headings defaults, three independent edits, trimming, persistence and validation');
+
+const moveIds=[];
+for(let i=0;i<3;i++){r=await call('/api/notes','POST',{title:'drag '+i,pin_level:2});moveIds.push(r.data.note.id);}
+r=await call('/api/notes/move','POST',{id:moveIds[2],level:2,before_id:moveIds[0]});assert.equal(r.status,200);
+r=await call('/api/notes');assert(r.data.notes.findIndex(n=>n.id===moveIds[2])<r.data.notes.findIndex(n=>n.id===moveIds[0]));
+r=await call('/api/notes/move','POST',{id:moveIds[2],level:3,before_id:null});assert.equal(r.status,200);
+r=await call('/api/notes/'+moveIds[2]);assert.equal(r.data.note.pin_level,3);
+r=await call('/api/notes/move','POST',{id:moveIds[2],level:0,before_id:null});assert.equal(r.status,200);
+r=await call('/api/notes/'+moveIds[2]);assert.equal(r.data.note.pinned,false);
+r=await call('/api/notes/move','POST',{id:moveIds[0],level:2,before_id:moveIds[2]});assert.equal(r.status,409);
+r=await call('/api/notes/move','POST',{id:moveIds[0],level:9,before_id:null});assert.equal(r.status,400);
+r=await call('/api/notes/'+moveIds[0],'PATCH',{body:'edit keeps position'});const position=r.data.note.sort_order;
+r=await call('/api/notes/'+moveIds[0]);assert.equal(r.data.note.sort_order,position);
+console.log('PASS: reorder, cross-group move, unpin, invalid destination, persistence');
