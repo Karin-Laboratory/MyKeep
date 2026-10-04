@@ -317,3 +317,11 @@ h2 { margin: 0; font-size: 1.15rem; }
 .drop-before-card { outline: 3px solid #568bd7; outline-offset: 3px; }
 .drag-over-row { box-shadow: inset 0 0 0 3px #568bd7; }
 .unpinned-drop-zone { min-height: 90px; padding: 10px; border-radius: 12px; }
+
+.sidebar-nav .nav-image-icon { width: 18px; height: 18px; vertical-align: middle; }
+.pin-row-heading .pin-heading-edit {
+  border: 0; border-radius: 3px; background: transparent; color: inherit;
+  padding: 0; font: inherit; text-align: left; cursor: text;
+}
+.pin-row-heading .pin-heading-edit:hover { text-decoration: underline; text-underline-offset: 4px; }
+.pin-row-heading .pin-heading-edit:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
