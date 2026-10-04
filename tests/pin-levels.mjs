@@ -10,6 +10,7 @@ for(const name of migrations.filter(n=>n<'0007')) sqlite.exec(readFileSync('migr
 const legacy='11111111-1111-4111-8111-111111111111';
 sqlite.prepare("INSERT INTO notes(id,title,pinned,created_at,updated_at) VALUES(?,?,1,?,?)").run(legacy,'legacy pin','2026-01-01','2026-01-01');
 sqlite.exec(readFileSync('migrations/0007_pin_levels.sql','utf8'));
+sqlite.exec(readFileSync('migrations/0008_pin_headings.sql','utf8'));
 class Statement {
  constructor(sql,args=[]){this.sql=sql;this.args=args;}
  bind(...args){return new Statement(this.sql,args);}
@@ -35,3 +36,9 @@ assert.equal(sqlite.prepare('SELECT pinned FROM notes WHERE id=?').get(legacy).p
 sqlite.prepare('UPDATE notes SET pinned=0 WHERE id=?').run(legacy);
 r=await call('/api/notes/'+legacy);assert.equal(r.data.note.pin_level,0);
 console.log('PASS: legacy migration, create/move/unpin, edit preservation, ordering, validation, unpinned view, rollback compatibility');
+
+r=await call('/api/pin-headings');assert.deepEqual(r.data.headings,['1段目','2段目','3段目']);
+for(const level of [1,2,3]){r=await call('/api/pin-headings','PATCH',{level,title:'  見出し'+level+'  '});assert.equal(r.status,200);assert.equal(r.data.headings[level-1],'見出し'+level);}
+r=await call('/api/pin-headings');assert.deepEqual(r.data.headings,['見出し1','見出し2','見出し3']);
+for(const input of [{level:0,title:'bad'},{level:4,title:'bad'},{level:1,title:' '},{level:2,title:'x'.repeat(61)},null]) {r=await call('/api/pin-headings','PATCH',input);assert.equal(r.status,400);}
+console.log('PASS: headings defaults, three independent edits, trimming, persistence and validation');
