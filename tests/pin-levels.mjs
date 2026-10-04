@@ -19,7 +19,7 @@ class Statement {
  async all(){return {results:sqlite.prepare(this.sql).all(...this.args),success:true};}
  async run(){return {meta:sqlite.prepare(this.sql).run(...this.args),success:true};}
 }
-const env={DB:{prepare:sql=>new Statement(sql),batch:async statements=>Promise.all(statements.map(s=>/RETURNING/i.test(s.sql)?s.all():s.run()))}};
+const env={DB:{prepare:sql=>new Statement(sql),batch:async statements=>Promise.all(statements.map(s=>/^\s*SELECT\b|RETURNING/i.test(s.sql)?s.all():s.run()))}};
 async function call(path,method='GET',body){const response=await worker.fetch(new Request('https://mykeep.example'+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)}),env);return {status:response.status,data:await response.json()};}
 let r=await call('/api/notes/'+legacy);assert.equal(r.data.note.pin_level,1);
 const ids=[];
