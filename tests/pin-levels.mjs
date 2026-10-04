@@ -65,3 +65,33 @@ r=await call('/api/counts');assert.equal(typeof r.data.views.images,'number');
 await call('/api/notes/'+imageNote.data.note.id,'PATCH',{archived:true});
 r=await call('/api/notes?view=images');assert(!r.data.notes.some(n=>n.id===imageNote.data.note.id));
 console.log('PASS: image filter, inverse filter, count and archive exclusion');
+
+// Exercise the attachment API with a real database and an in-memory R2 bucket.
+const objects = new Map();
+env.IMAGES = {
+  async put(key, bytes) { objects.set(key, new Uint8Array(bytes)); },
+  async get(key) { const body = objects.get(key); return body ? { body, size: body.length, httpEtag: '"test"' } : null; },
+  async delete(key) { objects.delete(key); },
+};
+const attachmentNote = (await call('/api/notes', 'POST', { title: 'attachments' })).data.note.id;
+for (const [filename, mime, content] of [['資料.pdf','application/pdf','%PDF-test'], ['data.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','sheet'], ['unknown.bin','application/octet-stream','binary'], ['page.html','text/html','<script>alert(1)</script>'], ['image.png','image/png','png']]) {
+  const response = await worker.fetch(new Request(`https://mykeep.example/api/notes/${attachmentNote}/attachments`, { method: 'POST', headers: { 'Content-Type': mime, 'X-File-Name': encodeURIComponent(filename) }, body: content }), env);
+  assert.equal(response.status, 201);
+  const { attachment } = await response.json();
+  assert.equal(attachment.filename, filename);
+  assert.equal(attachment.mime_type, mime);
+  const download = await worker.fetch(new Request('https://mykeep.example' + attachment.url), env);
+  assert.equal(await download.text(), content);
+  assert.equal(download.headers.get('X-Content-Type-Options'), 'nosniff');
+  if (mime === 'image/png') assert.equal(download.headers.get('Content-Type'), mime);
+  else { assert.equal(download.headers.get('Content-Type'), 'application/octet-stream'); assert(download.headers.get('Content-Disposition').includes(encodeURIComponent(filename))); }
+  assert.equal((await call(`/api/notes/${attachmentNote}/attachments/${attachment.id}`, 'DELETE')).status, 200);
+  assert.equal(objects.size, 0);
+}
+const oversize = await worker.fetch(new Request(`https://mykeep.example/api/notes/${attachmentNote}/attachments`, { method: 'POST', headers: { 'Content-Type': 'application/pdf', 'X-File-Name': 'large.pdf', 'Content-Length': String(21*1024*1024) }, body: 'test' }), env);
+assert.equal(oversize.status, 413);
+await build({entryPoints:['src/fileAppearance.ts'],bundle:true,format:'esm',platform:'browser',outfile:'/tmp/mykeep-file-appearance.mjs'});
+const {fileAppearance} = await import('/tmp/mykeep-file-appearance.mjs');
+for (const [filename, label] of [['report.PDF','PDF'], ['sheet.xlsx','表計算'], ['doc.docx','文書'], ['slides.pptx','プレゼンテーション'], ['sound.mp3','音声'], ['movie.mp4','動画'], ['archive.zip','圧縮ファイル'], ['data.bin','ファイル']]) assert.equal(fileAppearance(filename, '').label, label);
+assert.equal(fileAppearance('record', 'audio/ogg').label, '音声');
+console.log('PASS: file upload/download/delete, Unicode filenames, image compatibility, safe downloads, size limit and file icons');

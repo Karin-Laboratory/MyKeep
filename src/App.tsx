@@ -7,6 +7,7 @@ import { readKeepZip } from "./keepImport";
 import type { KeepZipResult } from "./keepImport";
 import { displayLinkTitle, getLinkPreview, mergeLinkPreview } from "./linkPreview";
 import type { LinkPreview } from "./linkPreview";
+import { fileAppearance } from "./fileAppearance";
 import { NOTE_COLORS } from "./types";
 import type { Attachment, ChecklistInput, Note, NoteColor, NoteInput } from "./types";
 
@@ -26,7 +27,7 @@ type ScrollAnchor = { id: string | null; top: number; scrollY: number };
 type ViewerImage = Pick<Attachment, "id" | "url" | "filename"> & { kind: "attachment" | "preview" };
 
 const emptyNote: NoteDraft = { title: "", body: "", url: "", pinned: false, pin_level: 0, archived: false, color: "default", card_image: "auto", checklist: [] };
-const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
 const countFormat = new Intl.NumberFormat("ja-JP");
 const IMAGE_EXTENSIONS: Record<string, string> = {
@@ -83,6 +84,11 @@ function ImageFilterIcon({ empty }: { empty: boolean }) {
     <path d="m3 17 6-6 4 4 3-3 5 5" />
     {empty && <path d="m2 2 20 20" />}
   </svg>;
+}
+
+function FileIcon({ filename, mime }: { filename: string; mime: string }) {
+  const file = fileAppearance(filename, mime);
+  return <span className="file-icon" role="img" aria-label={file.label} title={file.label}>{file.icon}</span>;
 }
 
 function SettingsIcon() {
@@ -235,7 +241,10 @@ function notePreview(note: Note, showTitle: boolean, showBody: boolean, showArch
         {cardImage.extra > 0 && <span className="photo-count">+{cardImage.extra}</span>}
       </span>
     )}
-    {note.attachments.length > imageAttachments.length && <span className="pin-label">📎 添付ファイル {note.attachments.length - imageAttachments.length}件</span>}
+    {note.attachments.length > imageAttachments.length && <span className="card-files">
+      {note.attachments.filter((item) => !IMAGE_TYPES.includes(item.mime_type)).map((item) =>
+        <span className="card-file" key={item.id} title={item.filename}><FileIcon filename={item.filename} mime={item.mime_type} /><span>{item.filename}</span></span>)}
+    </span>}
   </>;
 }
 
@@ -292,6 +301,11 @@ function LabelCreator({ disabled, onCreate }: { disabled: boolean; onCreate: (na
 }
 
 export default function App() {
+  const [collapsedPins, setCollapsedPins] = useState(() => [1, 2, 3].filter((level) => savedSetting(`mykeep.collapsedPin.${level}`, false)));
+  function setPinCollapsed(level: number, collapsed: boolean) {
+    setCollapsedPins((current) => collapsed ? [...new Set([...current, level])] : current.filter((item) => item !== level));
+    try { window.localStorage.setItem(`mykeep.collapsedPin.${level}`, String(collapsed)); } catch { /* Storage may be unavailable. */ }
+  }
   const [pinHeadings, setPinHeadings] = useState(["1段目", "2段目", "3段目"]);
   const [editingPinHeading, setEditingPinHeading] = useState<number | null>(null);
   const [pinHeadingDraft, setPinHeadingDraft] = useState("");
@@ -1013,7 +1027,7 @@ export default function App() {
       const images = pendingImagesRef.current;
       const title = !editingId && !draft.title.trim() && !draft.body.trim() && !draft.url.trim()
         && !draft.checklist.some((item) => item.text.trim()) && images.length
-        ? images[0].file.name.replace(/\.[^.]+$/, "") || "画像メモ" : draft.title;
+        ? images[0].file.name.replace(/\.[^.]+$/, "") || "添付メモ" : draft.title;
       const input = { ...draft, title, labels: selectedLabels };
       const { note } = editingId
         ? await api<{ note: Note }>(`/api/notes/${editingId}`, { method: "PATCH", body: JSON.stringify(input) })
@@ -1029,7 +1043,7 @@ export default function App() {
         try {
           const { attachment } = await api<{ attachment: Attachment }>(`/api/notes/${note.id}/attachments`, {
             method: "POST", body: image.file,
-            headers: { "Content-Type": image.file.type, "X-File-Name": encodeURIComponent(image.file.name) },
+            headers: { "Content-Type": image.file.type || "application/octet-stream", "X-File-Name": encodeURIComponent(image.file.name) },
           });
           setEditorAttachments((current) => [...current, attachment]);
           URL.revokeObjectURL(image.previewUrl);
@@ -1042,7 +1056,7 @@ export default function App() {
       scrollAnchorRef.current = captureListAnchor(editingId);
       reloadList();
       if (failed.length) {
-        setError(`メモは保存しました。画像のアップロードに失敗: ${failed.map((item) => item.file.name).join("、")}。保存を押すと再試行できます。`);
+        setError(`メモは保存しました。添付ファイルのアップロードに失敗: ${failed.map((item) => item.file.name).join("、")}。保存を押すと再試行できます。`);
       } else {
         closeEditor();
       }
@@ -1315,13 +1329,11 @@ export default function App() {
     const valid: PendingImage[] = [];
     const invalid: string[] = [];
     for (const original of files) {
-      if (!IMAGE_TYPES.includes(original.type)) {
-        invalid.push(`${original.name || "画像"}: JPEG・PNG・WebP・GIF・AVIF のみ対応しています。`);
-      } else if (!original.size || original.size > MAX_IMAGE_BYTES) {
-        invalid.push(`${original.name || "画像"}: 1枚20MB以下にしてください。`);
+      if (!original.size || original.size > MAX_ATTACHMENT_BYTES) {
+        invalid.push(`${original.name || "ファイル"}: 空でない20MB以下のファイルにしてください。`);
       } else {
-        const file = original.name ? original : new File([original], `貼り付け画像-${Date.now()}.${IMAGE_EXTENSIONS[original.type]}`, { type: original.type });
-        valid.push({ id: crypto.randomUUID(), file, previewUrl: URL.createObjectURL(file) });
+        const file = original.name ? original : new File([original], `貼り付けファイル-${Date.now()}.${IMAGE_EXTENSIONS[original.type] ?? "bin"}`, { type: original.type });
+        valid.push({ id: crypto.randomUUID(), file, previewUrl: IMAGE_TYPES.includes(file.type) ? URL.createObjectURL(file) : "" });
       }
     }
     if (valid.length) {
@@ -1339,7 +1351,7 @@ export default function App() {
 
   function pasteImages(event: ClipboardEvent<HTMLFormElement>) {
     const files = Array.from(event.clipboardData.items)
-      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .filter((item) => item.kind === "file")
       .map((item) => item.getAsFile()).filter((file): file is File => file !== null);
     if (!files.length) return;
     event.preventDefault();
@@ -1360,7 +1372,7 @@ export default function App() {
   }
 
   async function removeImage(attachment: Attachment) {
-    if (!editingId || working || !window.confirm("この画像を削除しますか？")) return;
+    if (!editingId || working || !window.confirm("この添付ファイルを削除しますか？")) return;
     setWorking(true);
     setError("");
     try {
@@ -1636,8 +1648,13 @@ export default function App() {
         {view !== "unpinned" && pinRows.map(({ level, notes: rowNotes }) => (view === "active" || rowNotes.length > 0) &&
           <section className={`pin-row${dropLevel === level ? " drag-over-row" : ""}`} data-pin-level={level}
             onDragOver={(event) => { if (draggingNoteRef.current && !working) { event.preventDefault(); setDropNoteId(null); setDropLevel(level); } }}
-            onDrop={(event) => { if (draggingNoteRef.current) { event.preventDefault(); void dropCard(level, null); } }} key={level} aria-label={`${pinHeadings[level - 1]}のピン留めメモ`}>
+            onDrop={(event) => { if (draggingNoteRef.current) { event.preventDefault(); setPinCollapsed(level, false); void dropCard(level, null); } }} key={level} aria-label={`${pinHeadings[level - 1]}のピン留めメモ`}>
             <div className="pin-row-heading">
+              <button type="button" className="pin-collapse" aria-expanded={!collapsedPins.includes(level)} aria-controls={`pin-content-${level}`}
+                aria-label={`${pinHeadings[level - 1]}を${collapsedPins.includes(level) ? "展開" : "折りたたむ"}`}
+                onClick={() => setPinCollapsed(level, !collapsedPins.includes(level))}>
+                <span aria-hidden="true">⌄</span>
+              </button>
               {editingPinHeading === level ? <form onSubmit={savePinHeading}>
                 <input autoFocus aria-label={`${level}段目の見出し`} maxLength={60} required
                   value={pinHeadingDraft} disabled={pinHeadingSaving}
@@ -1652,8 +1669,13 @@ export default function App() {
               </h2>}
             </div>
             {pinHeadingError && (editingPinHeading === level || !pinHeadingsLoaded) && <p role="alert">{pinHeadingError}</p>}
-            {rowNotes.length > 0 ? <div className="grid">{rowNotes.map(renderNoteCard)}</div>
-              : <p className="pin-row-empty">この段にピン留めしたメモはありません。</p>}
+            <div id={`pin-content-${level}`} className={`pin-blind${collapsedPins.includes(level) ? " collapsed" : ""}`}
+              inert={collapsedPins.includes(level)} aria-hidden={collapsedPins.includes(level)}>
+              <div className="pin-blind-inner">
+                {rowNotes.length > 0 ? <div className="grid">{rowNotes.map(renderNoteCard)}</div>
+                  : <p className="pin-row-empty">この段にピン留めしたメモはありません。</p>}
+              </div>
+            </div>
           </section>)}
         {(otherNotes.length > 0 || view === "active") && <section className={`grid unpinned-drop-zone${dropLevel === 0 ? " drag-over-row" : ""}`}
           onDragOver={(event) => { if (draggingNoteRef.current && !working) { event.preventDefault(); setDropNoteId(null); setDropLevel(0); } }}
@@ -1859,16 +1881,16 @@ export default function App() {
               <label><input type="checkbox" checked={draft.archived} onChange={(event) => setDraft({ ...draft, archived: event.target.checked })} /> アーカイブ</label>
             </div>
             <section className="image-section" aria-label="添付ファイル">
-              <strong>画像を追加</strong>
+              <strong>画像・ファイルを追加</strong>
               <div className={`image-dropzone${draggingImage ? " dragging" : ""}`}
                 onDragEnter={(event) => { if (Array.from(event.dataTransfer.types).includes("Files")) { event.preventDefault(); setDraggingImage(true); } }}
                 onDragOver={(event) => { if (Array.from(event.dataTransfer.types).includes("Files")) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDraggingImage(true); } }}
                 onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDraggingImage(false); }}
                 onDrop={dropImages}>
                 <label className="upload-label">ファイルを選択
-                  <input type="file" accept={IMAGE_TYPES.join(",")} multiple onChange={addImages} disabled={working} />
+                  <input type="file" multiple onChange={addImages} disabled={working} />
                 </label>
-                <span className="image-hint">Ctrl+Vで貼り付け / ここへドラッグ＆ドロップ</span>
+                <span className="image-hint">Ctrl+Vで貼り付け / ドラッグ＆ドロップ（1ファイル20MBまで）</span>
               </div>
               {(editorAttachments.length > 0 || editorPreviewImage) && <>
                 <small className="image-group-label">保存済み</small>
@@ -1882,7 +1904,7 @@ export default function App() {
                       <div className="editor-image" key={attachment.id}>
                         {IMAGE_TYPES.includes(attachment.mime_type)
                           ? <button type="button" className="image-thumbnail" aria-label={`${attachment.filename}を拡大表示`} onClick={() => setViewerImageId(attachment.id)}><img src={attachment.url} alt={attachment.filename} loading="lazy" /></button>
-                          : <a href={attachment.url} download={attachment.filename}>{attachment.filename}</a>}
+                          : <a className="file-download" href={attachment.url} download={attachment.filename}><FileIcon filename={attachment.filename} mime={attachment.mime_type} /><span>{attachment.filename}</span></a>}
                         <button type="button" onClick={() => removeImage(attachment)} disabled={working} aria-label={`${attachment.filename}を削除`}>削除</button>
                         {IMAGE_TYPES.includes(attachment.mime_type) && <label className="card-image-radio">
                           <input type="radio" name="card-image" value={`attachment:${attachment.id}`} checked={draft.card_image === `attachment:${attachment.id}`} disabled={working}
@@ -1902,7 +1924,7 @@ export default function App() {
                 <small className="image-group-label">追加予定</small>
                 <div className="editor-images">
                   {pendingImages.map((image) => <div className="editor-image" key={image.id}>
-                    <img src={image.previewUrl} alt={image.file.name} />
+                    {image.previewUrl ? <img src={image.previewUrl} alt={image.file.name} /> : <div className="pending-file-icon"><FileIcon filename={image.file.name} mime={image.file.type} /></div>}
                     <span className="pending-image-name" title={image.file.name}>{image.file.name}</span>
                     <button type="button" onClick={() => removePendingImage(image.id)} disabled={working} aria-label={`${image.file.name}を取り消す`}>取り消す</button>
                   </div>)}
