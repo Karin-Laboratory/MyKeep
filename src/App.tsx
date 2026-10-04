@@ -307,6 +307,21 @@ export default function App() {
     } catch (error) { setPinHeadingError(error instanceof Error ? error.message : "保存に失敗しました。"); }
     finally { setPinHeadingSaving(false); }
   }
+  const draggingNoteRef = useRef<string | null>(null);
+  const [draggingNote, setDraggingNote] = useState<string | null>(null);
+  const [dropNoteId, setDropNoteId] = useState<string | null>(null);
+  const [dropLevel, setDropLevel] = useState<number | null>(null);
+  async function dropCard(level: number, beforeId: string | null) {
+    const id = draggingNoteRef.current;
+    draggingNoteRef.current = null; setDraggingNote(null); setDropNoteId(null); setDropLevel(null);
+    if (!id || working || id === beforeId) return;
+    setWorking(true); setError(""); setUndoAction(null);
+    try {
+      await api("/api/notes/move", { method: "POST", body: JSON.stringify({ id, level, before_id: beforeId }) });
+      reloadList();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "移動に失敗しました。"); }
+    finally { setWorking(false); }
+  }
   const [view, setView] = useState<View>("active");
   const [search, setSearch] = useState("");
   const [labelFilter, setLabelFilter] = useState("");
@@ -1030,25 +1045,6 @@ export default function App() {
     }
   }
 
-  async function updatePinLevel(note: Note, level: number) {
-    if (working) return;
-    setWorking(true);
-    setError("");
-    setUndoAction(null);
-    try {
-      await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify({ pin_level: level }) });
-      reloadList();
-      setUndoAction({
-        message: level ? `${level}段目にピン留めしました。` : "ピンを解除しました。",
-        undo: async () => {
-          await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify({ pin_level: note.pinned ? note.pin_level || 1 : 0 }) });
-        },
-      });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "更新に失敗しました。");
-    } finally { setWorking(false); }
-  }
-
   async function updateFlag(note: Note, field: "pinned" | "archived") {
     if (working) return;
     const pinAnchor = field === "pinned" ? captureListAnchor(note.id) : null;
@@ -1506,7 +1502,24 @@ export default function App() {
     const remainingDays = view === "trash" ? trashRemainingDays(note.deleted_at) : null;
     const selected = selectedNoteIds.has(note.id);
     return (
-      <article className={`card${selected ? " selected-card" : ""}`} data-color={note.color} data-note-id={note.id} key={note.id}
+      <article className={`card${selected ? " selected-card" : ""}${draggingNote === note.id ? " dragging-card" : ""}${dropNoteId === note.id ? " drop-before-card" : ""}`} data-color={note.color} data-note-id={note.id} key={note.id}
+        draggable={view !== "trash" && !selecting && !working}
+        onDragStart={(event) => {
+          if (view === "trash" || selecting || working) { event.preventDefault(); return; }
+          draggingNoteRef.current = note.id; setDraggingNote(note.id);
+          event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-mykeep-note", note.id);
+        }}
+        onDragEnd={() => { draggingNoteRef.current = null; setDraggingNote(null); setDropNoteId(null); setDropLevel(null); }}
+        onDragOver={(event) => {
+          if (!draggingNoteRef.current || working) return;
+          event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "move";
+          setDropNoteId(note.id); setDropLevel(note.pinned ? note.pin_level || 1 : 0);
+        }}
+        onDrop={(event) => {
+          if (!draggingNoteRef.current) return;
+          event.preventDefault(); event.stopPropagation();
+          void dropCard(note.pinned ? note.pin_level || 1 : 0, note.id);
+        }}
         onClick={selecting ? () => toggleNoteSelection(note.id) : undefined}>
         {selecting && <button type="button" className="card-select" aria-label={`${note.title || "無題のメモ"}${selected ? "の選択を解除" : "を選択"}`}
           aria-pressed={selected} disabled={working} onClick={(event) => { event.stopPropagation(); toggleNoteSelection(note.id); }}>{selected ? "✓" : ""}</button>}
@@ -1538,11 +1551,6 @@ export default function App() {
             <button disabled={working} onClick={() => restore(note)}>復元</button>
             <button className="danger" disabled={working} onClick={() => permanentlyRemove(note)}>完全削除</button>
           </> : <>
-            <select className="pin-select" aria-label={`${note.title || "無題のメモ"}のピン留め先`} disabled={working}
-              value={note.pinned ? note.pin_level || 1 : 0} onChange={(event) => updatePinLevel(note, Number(event.target.value))}>
-              <option value={0}>ピンなし</option><option value={1}>1段目・ピンク</option>
-              <option value={2}>2段目・イエロー</option><option value={3}>3段目・ブルー</option>
-            </select>
             <button disabled={working} onClick={() => updateFlag(note, "archived")}>{note.archived ? "戻す" : "アーカイブ"}</button>
             {note.archived && <button className="trash-action" disabled={working} onClick={() => moveCardToTrash(note)}>ゴミ箱</button>}
           </>}
@@ -1618,7 +1626,9 @@ export default function App() {
         <section className="grid" aria-label="ゴミ箱一覧">{notes.map(renderNoteCard)}</section>
       ) : <>
         {view !== "unpinned" && pinRows.map(({ level, notes: rowNotes }) => (view === "active" || rowNotes.length > 0) &&
-          <section className="pin-row" data-pin-level={level} key={level} aria-label={`${pinHeadings[level - 1]}のピン留めメモ`}>
+          <section className={`pin-row${dropLevel === level ? " drag-over-row" : ""}`} data-pin-level={level}
+            onDragOver={(event) => { if (draggingNoteRef.current && !working) { event.preventDefault(); setDropNoteId(null); setDropLevel(level); } }}
+            onDrop={(event) => { if (draggingNoteRef.current) { event.preventDefault(); void dropCard(level, null); } }} key={level} aria-label={`${pinHeadings[level - 1]}のピン留めメモ`}>
             <div className="pin-row-heading">
               {editingPinHeading === level ? <form onSubmit={savePinHeading}>
                 <input autoFocus aria-label={`${level}段目の見出し`} maxLength={60} required
@@ -1638,7 +1648,9 @@ export default function App() {
             {rowNotes.length > 0 ? <div className="grid">{rowNotes.map(renderNoteCard)}</div>
               : <p className="pin-row-empty">この段にピン留めしたメモはありません。</p>}
           </section>)}
-        {otherNotes.length > 0 && <section className="grid" aria-label={view === "active" ? "メモ一覧" : view === "unpinned" ? "ピンなしメモ一覧" : view === "imageless" ? "画像なしメモ一覧" : "アーカイブ一覧"}>{otherNotes.map(renderNoteCard)}</section>}
+        {(otherNotes.length > 0 || view === "active") && <section className={`grid unpinned-drop-zone${dropLevel === 0 ? " drag-over-row" : ""}`}
+          onDragOver={(event) => { if (draggingNoteRef.current && !working) { event.preventDefault(); setDropNoteId(null); setDropLevel(0); } }}
+          onDrop={(event) => { if (draggingNoteRef.current) { event.preventDefault(); void dropCard(0, null); } }} aria-label={view === "active" ? "メモ一覧" : view === "unpinned" ? "ピンなしメモ一覧" : view === "imageless" ? "画像なしメモ一覧" : "アーカイブ一覧"}>{otherNotes.length ? otherNotes.map(renderNoteCard) : <p className="pin-row-empty">ピンなしのメモをここに移動できます。</p>}</section>}
       </>}
 
       {(loading || loadingMore) && <p className="status">読み込み中…</p>}
