@@ -990,6 +990,22 @@ async function deleteAttachment(noteId: string, attachmentId: string, env: Env):
   return json({ ok: true });
 }
 
+async function pinHeadings(request: Request, env: Env): Promise<Response> {
+  if (request.method === "PATCH") {
+    const input = await readInput(request) as { level?: unknown; title?: unknown } | null;
+    if (!input || !Number.isInteger(input.level) || Number(input.level) < 1 || Number(input.level) > 3
+      || typeof input.title !== "string" || !input.title.trim() || input.title.trim().length > 60) {
+      return json({ error: "見出しは1〜60文字で入力してください。" }, 400);
+    }
+    await env.DB.prepare("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .bind(`pin_heading_${input.level}`, input.title.trim()).run();
+  }
+  const { results } = await env.DB.prepare("SELECT key, value FROM app_settings WHERE key IN ('pin_heading_1', 'pin_heading_2', 'pin_heading_3')")
+    .all<{ key: string; value: string }>();
+  const headings = [1, 2, 3].map(level => results.find(row => row.key === `pin_heading_${level}`)?.value ?? `${level}段目`);
+  return json({ headings });
+}
+
 export default {
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
     await purgeOldTrash(env);
@@ -1010,6 +1026,10 @@ export default {
       if (request.method !== "GET") {
         const origin = request.headers.get("Origin");
         if (origin && origin !== url.origin) return json({ error: "この操作は許可されていません。" }, 403);
+      }
+
+      if (url.pathname === "/api/pin-headings" && (request.method === "GET" || request.method === "PATCH")) {
+        return await pinHeadings(request, env);
       }
 
       if (url.pathname === "/api/counts" && request.method === "GET") {
