@@ -57,3 +57,11 @@ r=await call('/api/notes/move','POST',{id:moveIds[0],level:9,before_id:null});as
 r=await call('/api/notes/'+moveIds[0],'PATCH',{body:'edit keeps position'});const position=r.data.note.sort_order;
 r=await call('/api/notes/'+moveIds[0]);assert.equal(r.data.note.sort_order,position);
 console.log('PASS: reorder, cross-group move, unpin, invalid destination, persistence');
+
+const imageNote=await call('/api/notes','POST',{title:'image-filter',preview_image:'https://example.com/test.png'});
+r=await call('/api/notes?view=images');assert(r.data.notes.some(n=>n.id===imageNote.data.note.id));
+r=await call('/api/notes?view=imageless');assert(!r.data.notes.some(n=>n.id===imageNote.data.note.id));
+r=await call('/api/counts');assert.equal(typeof r.data.views.images,'number');
+await call('/api/notes/'+imageNote.data.note.id,'PATCH',{archived:true});
+r=await call('/api/notes?view=images');assert(!r.data.notes.some(n=>n.id===imageNote.data.note.id));
+console.log('PASS: image filter, inverse filter, count and archive exclusion');
