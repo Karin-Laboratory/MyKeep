@@ -293,3 +293,15 @@ h2 { margin: 0; font-size: 1.15rem; }
 :root[data-theme="dark"] .bulk-toolbar .bulk-danger { color: #ffaaaa; }
 :root[data-theme="dark"] .bulk-result { color: #bcbdbd; }
 :root[data-theme="dark"] .card.selected-card { outline-color: #f4c84c; }
+
+.pin-row { padding: 16px; margin-bottom: 18px; border-radius: 14px; color: #493e45; background: #fce8ee; }
+.pin-row[data-pin-level="2"] { background: #fff6d8; color: #50482e; }
+.pin-row[data-pin-level="3"] { background: #e5f1fc; color: #34495e; }
+.pin-row h2 { margin: 0 0 12px; font-size: .9rem; font-weight: 600; }
+.pin-row-empty { margin: 0; padding: 4px 0 8px; font-size: .82rem; opacity: .7; }
+.pin-select { max-width: 150px; min-height: 32px; border: 1px solid #ddd; border-radius: 6px; padding: 4px; font: inherit; font-size: .8rem; background: #fff; color: #333; }
+:root[data-theme="dark"] .pin-row { background: #49313d; color: #f8dce8; }
+:root[data-theme="dark"] .pin-row[data-pin-level="2"] { background: #453f29; color: #f8edc3; }
+:root[data-theme="dark"] .pin-row[data-pin-level="3"] { background: #293e50; color: #d6eaff; }
+:root[data-theme="dark"] .pin-select { background: #303030; color: #eee; border-color: #555; }
+@media (max-width: 600px) { .pin-row { padding: 12px; } }
