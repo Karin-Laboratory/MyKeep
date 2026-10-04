@@ -14,3 +14,9 @@ Before this change: GitHub branch `backup/before-pin-headings-20261004`;
 Cloudflare version `66802f8e-87b3-48c8-8dc9-72b8e9ea4ff0`.
 Deploy that version at 100% to roll back. Keep the additive app_settings table
 and migration 0008 intact; no memo data needs to be changed or deleted.
+
+## Drag and drop cards (2026-10-04)
+Before this change: GitHub `backup/before-card-drag-20261004`;
+Cloudflare version `a8496e12-b574-40ea-8e15-0057b23b25f9`.
+Deploy that version at 100% to roll back; keep additive sort_order column
+and migration 0009. Existing notes, attachments and headings are preserved.
