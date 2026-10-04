@@ -305,3 +305,9 @@ h2 { margin: 0; font-size: 1.15rem; }
 :root[data-theme="dark"] .pin-row[data-pin-level="3"] { background: #293e50; color: #d6eaff; }
 :root[data-theme="dark"] .pin-select { background: #303030; color: #eee; border-color: #555; }
 @media (max-width: 600px) { .pin-row { padding: 12px; } }
+
+.pin-row-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.pin-row-heading h2 { margin: 0; }
+.pin-row-heading form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; }
+.pin-row-heading input { min-width: 0; flex: 1; max-width: 360px; padding: 6px 8px; }
+.pin-row-heading button { font-size: .8rem; padding: 4px 8px; }
