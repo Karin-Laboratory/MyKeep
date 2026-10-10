@@ -1,15 +1,42 @@
-# Karin Notepad
+# Karin Notepad リアルタイム同期版
 
-Windows のメモ帳風の軽量 Web エディター。 https://notepad.karin-lab.com 
+公開 URL: https://notepad.karin-lab.com
 
-機能: 複数タブ、ファイル読み込み、UTF-8 テキストのダウンロード保存、検索・置換、折り返し、ズーム、ライト・ダーク、ショートカット、ブラウザ内の自動復元。
+Windows のメモ帳をイメージした、Cloudflare Workers 上のテキストエディター。
 
-文章はブラウザの localStorage のみに保存され、サーバーへ送信しません。データ消去に備え、重要な内容はローカルファイルに保存してください。
+## 構成
 
-Worker ソース: notepad/worker.js
+- GitHub: このブランチ `notepad-web` の `notepad/worker.js`
+- Cloudflare Workers: `karin-notepad`
+- Cloudflare Access: 本人メールアドレスのみ許可するメールOTP。セッション有効期限 720h (30日)
+- Durable Objects: `NotepadRoom` (WebSocket、変更内容の即時配信と調停)
+- D1: `karin-notepad` (文書と保存履歴)
 
-Cloudflare Workers デプロイ例: wrangler deploy notepad/worker.js --name karin-notepad --compatibility-date 2026-10-11
+## 保存と同期
 
-Microsoft の公式ソフトではない独立実装です。保存はブラウザからのダウンロード方式です。
+入力後約180ミリ秒のデバウンスで WebSocket に送信し、D1への書込後、接続中の各端末に新版を配信する。通常のネットワーク条件なら数百ミリ秒程度を目指す（通信状態やD1応答による遅延あり、実測保証なし）。
 
-専用リポジトリ作成の API が接続にないため、独立ブランチ notepad-web に置いています。main は変更していません。
+本文全体をリビジョン番号・ベース本文付きで送信し、サーバーが最新本文との変更区間を照合する。別々の箇所への編集は統合し、同じ箇所に競合が発生すると選択ダイアログで採用版を決める。競合コピーは自動生成しない。**OT/CRDTによる完全な共同編集エンジンではなく、重なる操作・複雑な編集に制約がある。**
+
+切断時はブラウザの localStorage に下書きを退避。再接続後に復帰する。別端末の現在の内容と統合できない場合、画面で選択を求める。
+
+Undo/Redo は端末内の直近の編集操作を対象とし、クラウドでは D1 に直近60リビジョンの履歴を残す。右上の「履歴」から以前の版に戻せる。
+
+Ctrl+S はクラウド保存、Ctrl+Shift+S はローカルPCへダウンロード保存。
+
+## 制限・注意
+
+- 1文書最大50万文字、最大100文書
+- ブラウザ更新によって編集中のUndoスタックは消える。保存履歴はクラウドに残る。
+- 同期処理中やオフラインでは必ず右上の保存状態を確認する。
+- 別端末のリアルタイム同期はWebSocket接続中に機能する。ブラウザでのA/B同時編集の実機検証は別途必要。
+- Cloudflare API経由で直接デプロイしたため、GitHub更新だけでは自動配備されない。
+- Microsoft公式アプリではない。
+
+## 開発用デプロイ設定
+
+Worker script: `karin-notepad`、main module: `worker.js`、compatibility_date: `2026-09-01`。
+
+Bindings: `DB` = D1 `karin-notepad`; `ROOM` = SQLite backed Durable Object `NotepadRoom`、migration tag `v1`。
+
+Accessの設定はCloudflare側で管理する。公開リポジトリに認証情報を保存しない。
