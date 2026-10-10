@@ -40,3 +40,14 @@ Worker script: `karin-notepad`、main module: `worker.js`、compatibility_date: 
 Bindings: `DB` = D1 `karin-notepad`; `ROOM` = SQLite backed Durable Object `NotepadRoom`、migration tag `v1`。
 
 Accessの設定はCloudflare側で管理する。公開リポジトリに認証情報を保存しない。
+
+## スマートフォン対応（2026-10-11）
+
+- 画面幅に応じてPCのタブ表示からスマホの文書選択プルダウンに切り替え。
+- 画面下部に大きめのタッチ操作ボタン（元に戻す、やり直し、検索、クラウド保存、その他）。
+- 「その他」から新しい文書、ローカルファイルの開閉、置換、履歴、折り返し、テーマ、キーボードを閉じる、文書削除を操作。
+- iOS Safari / Android Chrome を意識して、ノッチのセーフエリア、縦横画面、VisualViewport によるソフトウェアキーボード表示中の編集高さを調整。スマホの編集フォントは最低16px。
+- 日本語IME変換中は同じ文書のリモート変更の適用を保留し、変換確定後に処理。カーソル・Undoをできるだけ保全する。
+- リアルタイム同期のD1 / Durable Object処理は変更なし。Cloudflare Access 30日認証も維持。
+
+スマホブラウザ上の手動操作試験は未実施。OTPログイン、ソフトキーボードと表示領域、縦横切替、同一文書のA/B同期を実端末で確認してください。
